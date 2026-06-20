@@ -1,0 +1,121 @@
+# Continuous deployment: update Azure Container Apps after CI succeeds on main.
+# One-time setup: docs/AZURE_CD_SETUP.md (reuse AZURE_CREDENTIALS from claims-intelligence).
+
+name: Deploy to Azure
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+    branches: [main, master]
+
+env:
+  REGISTRY: ghcr.io
+  RESOURCE_GROUP: rg-claims-intelligence
+  API_APP_NAME: medicare-classifier-api
+  UI_APP_NAME: medicare-classifier-ui
+
+jobs:
+  deploy:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.head_branch == 'main' ||
+       github.event.workflow_run.head_branch == 'master')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set image names and tag
+        run: |
+          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          FULL_SHA="${{ github.event.workflow_run.head_sha }}"
+          SHORT_SHA="${FULL_SHA:0:7}"
+          echo "IMAGE_TAG=${SHORT_SHA}" >> "$GITHUB_ENV"
+          echo "COMMIT_SHA=${FULL_SHA}" >> "$GITHUB_ENV"
+          echo "REVISION_SUFFIX=r${SHORT_SHA}" >> "$GITHUB_ENV"
+          echo "API_IMAGE=${{ env.REGISTRY }}/${REPO}:${SHORT_SHA}" >> "$GITHUB_ENV"
+          echo "UI_IMAGE=${{ env.REGISTRY }}/${REPO}-streamlit:${SHORT_SHA}" >> "$GITHUB_ENV"
+
+      - name: Verify images exist in GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Inspect GHCR manifests before deploy
+        run: |
+          docker manifest inspect "$API_IMAGE"
+          docker manifest inspect "$UI_IMAGE"
+
+      - name: Configure GHCR pull on Container Apps (private packages)
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          GHCR_USER: ${{ secrets.GHCR_USER }}
+        run: |
+          if [ -n "$GHCR_TOKEN" ]; then
+            USER="${GHCR_USER:-DeepakGuptaaiml}"
+            for APP in "${{ env.API_APP_NAME }}" "${{ env.UI_APP_NAME }}"; do
+              echo "Setting GHCR registry credentials on $APP"
+              az containerapp registry set \
+                --name "$APP" \
+                --resource-group "${{ env.RESOURCE_GROUP }}" \
+                --server ghcr.io \
+                --username "$USER" \
+                --password "$GHCR_TOKEN"
+            done
+          else
+            echo "GHCR_TOKEN not set — assuming public GHCR packages"
+          fi
+
+      - name: Deploy API Container App
+        run: |
+          az containerapp update \
+            --name "${{ env.API_APP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --image "$API_IMAGE" \
+            --revision-suffix "$REVISION_SUFFIX"
+
+      - name: Deploy Streamlit Container App
+        run: |
+          az containerapp update \
+            --name "${{ env.UI_APP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --image "$UI_IMAGE" \
+            --revision-suffix "$REVISION_SUFFIX"
+
+      - name: Verify API health
+        run: |
+          FQDN=$(az containerapp show \
+            --name "${{ env.API_APP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          echo "API URL: https://${FQDN}"
+          sleep 20
+          curl -sf "https://${FQDN}/health"
+          curl -sf "https://${FQDN}/model/sample" | head -c 200
+          echo ""
+
+      - name: Deployment summary
+        run: |
+          API_FQDN=$(az containerapp show \
+            --name "${{ env.API_APP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          UI_FQDN=$(az containerapp show \
+            --name "${{ env.UI_APP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          echo "## Deployed to Azure" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Commit:** \`${COMMIT_SHA}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **API image:** \`$API_IMAGE\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **UI image:** \`$UI_IMAGE\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **API URL:** https://${API_FQDN}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **UI URL:** https://${UI_FQDN}" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,8 @@
+.venv/
+.venv312/
+__pycache__/
+.pytest_cache/
+.ipynb_checkpoints/
+*.pyc
+.DS_Store
+Medicare_Classifier_Notebook_executed.ipynb

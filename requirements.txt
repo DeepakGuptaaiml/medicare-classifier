@@ -1,0 +1,15 @@
+# Medicare Classifier — Python 3.12 recommended for SHAP
+# Training/inference core libs work on 3.14; shap/numba need 3.12 for full explainability plots.
+# Phase 2 Dockerfile will use python:3.12-slim (aligned with claims-intelligence).
+
+pandas>=2.0
+numpy>=1.24
+matplotlib>=3.7
+seaborn>=0.13
+scikit-learn>=1.3
+imbalanced-learn>=0.11
+xgboost>=2.0
+shap>=0.44
+joblib>=1.3
+jupyter>=1.0
+nbconvert>=7.0

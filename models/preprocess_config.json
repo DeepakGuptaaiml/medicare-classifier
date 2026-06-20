@@ -1,0 +1,107 @@
+{
+  "cat_impute": {
+    "data_set": "WC",
+    "pay_cat": "PI",
+    "pay_type": "SYS",
+    "pay_code_bucket": "ORM"
+  },
+  "num_impute": {
+    "pay_code": 328.0,
+    "paid_1": 24488.385000000002,
+    "paid_3": 47490.055,
+    "amount": 5019.635,
+    "proc_unit": 49.0,
+    "cont_num": 5414.5,
+    "claim_open": 1.0,
+    "date_v1m_xmit_flag": 0.0,
+    "is_us_claimant": 1.0,
+    "orm_threshold_met": 1.0,
+    "tpoc_threshold_met": 1.0,
+    "is_wc": 1.0,
+    "is_excluded_coverage": 0.0,
+    "is_excluded_line": 0.0,
+    "days_open": 0.0,
+    "age_at_event": 70.5
+  },
+  "categorical_options": {
+    "data_set": [
+      "AU",
+      "GL",
+      "PF",
+      "WC"
+    ],
+    "pay_cat": [
+      "BI",
+      "CL",
+      "CM",
+      "MP",
+      "OT",
+      "PD",
+      "PI"
+    ],
+    "pay_type": [
+      "HIS",
+      "MAN",
+      "SYS"
+    ],
+    "pay_code_bucket": [
+      "ORM",
+      "SETTLEMENT",
+      "TPOC"
+    ]
+  },
+  "feature_columns": [
+    "pay_code",
+    "paid_1",
+    "paid_3",
+    "amount",
+    "proc_unit",
+    "cont_num",
+    "claim_open",
+    "date_v1m_xmit_flag",
+    "is_us_claimant",
+    "orm_threshold_met",
+    "tpoc_threshold_met",
+    "is_wc",
+    "is_excluded_coverage",
+    "is_excluded_line",
+    "days_open",
+    "age_at_event",
+    "data_set_GL",
+    "data_set_PF",
+    "data_set_WC",
+    "pay_cat_CL",
+    "pay_cat_CM",
+    "pay_cat_MP",
+    "pay_cat_OT",
+    "pay_cat_PD",
+    "pay_cat_PI",
+    "pay_type_MAN",
+    "pay_type_SYS",
+    "pay_code_bucket_SETTLEMENT",
+    "pay_code_bucket_TPOC"
+  ],
+  "raw_features": [
+    "data_set",
+    "pay_cat",
+    "pay_code",
+    "pay_type",
+    "paid_1",
+    "paid_3",
+    "amount",
+    "proc_unit",
+    "cont_num",
+    "claim_open",
+    "date_v1m_xmit_flag",
+    "is_us_claimant",
+    "orm_threshold_met",
+    "tpoc_threshold_met",
+    "is_wc",
+    "pay_code_bucket",
+    "is_excluded_coverage",
+    "is_excluded_line",
+    "days_open",
+    "age_at_event"
+  ],
+  "target": "is_medicare_reportable"
+}

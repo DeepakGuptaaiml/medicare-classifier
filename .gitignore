@@ -1,0 +1,19 @@
+.venv/
+.venv312/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+*.egg-info/
+.DS_Store
+
+# Large notebook outputs (keep source notebook)
+*_executed.ipynb
+
+# IDE
+.idea/
+.vscode/
+
+# Env secrets
+.env
+.env.*
