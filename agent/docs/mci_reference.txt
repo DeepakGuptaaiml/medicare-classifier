@@ -1,0 +1,146 @@
+MEDICARE CLAIM IDENTIFICATION (MCI) REFERENCE
+MMSEA Section 111 — Source System Rules for V1M Extraction
+================================================================
+
+1. OVERVIEW
+-----------
+The Source System identifies Medicare-reportable claims under the Medicare, Medicaid,
+and SCHIP Extension Act (MMSEA) Section 111. Reportable claims are extracted to XML
+and transmitted to viaOne Medicare (V1M) for Responsible Reporting Entity (RRE) compliance.
+
+The MCI process determines whether a claim line or payment event triggers ORM (Ongoing
+Responsibility for Medicals) or TPOC (Total Payment Obligation to Claimant) reporting
+to the Centers for Medicare & Medicaid Services (CMS).
+
+2. PAY CODE CLASSIFICATION
+--------------------------
+Pay codes drive the ORM vs TPOC bucket assignment:
+
+WORKERS COMP (WC) PAY CODES:
+  - WC TPOC: pay codes 100-199 and pay code 390
+  - WC ORM:  pay codes 300-389 and pay codes 391-399
+
+NON-WC PAY CODES:
+  - Non-WC TPOC: pay codes 100-199
+  - Non-WC ORM:  pay codes 300-399 (pay code 390 remains in ORM bucket for Non-WC)
+
+Pay code 390 is treated as TPOC for WC but stays in ORM for Non-WC claims.
+
+3. HARD EXCLUSIONS (NEVER REPORT TO V1M)
+----------------------------------------
+A claim is excluded from Medicare reporting if ANY of the following apply:
+
+  a) coverage_code IN ('ZE', 'WA', 'LT')
+     - ZE: Excluded coverage type
+     - WA: Waived coverage
+     - LT: Long-term exclusion category
+
+  b) line_code IN ('ZE', 'GR')
+     - ZE: Excluded line of business
+     - GR: Group exclusion line
+
+  c) claim_type = 'IO' (Incident Only)
+     - No ongoing medical responsibility; incident-only records are not reportable
+
+  d) proc_unit = 65 (Sedgwick Legal)
+     - Legal-only processing unit excluded from V1M extraction
+
+  e) cont_num = 2580 (Royal Caribbean)
+     - Contract-specific exclusion per carrier agreement
+
+  f) data_set IN ('DS', 'PR')
+     - DS: Data set excluded from MMSEA scope
+     - PR: Preliminary/prototype data set
+
+  g) Invalid SSN combined with non-US claimant country
+     - Claimant must have valid US SSN OR valid US residency for matching
+
+  h) RRE not resolvable
+     - If the Responsible Reporting Entity cannot be determined from hierarchy rules,
+       the claim cannot be transmitted
+
+4. ALWAYS REPORTABLE
+--------------------
+If date_v1m_xmit is already set (non-null transmission date), the claim is ALWAYS
+reportable. Re-transmission or update events may apply per CMS guidance. The
+date_v1m_xmit_flag = 1 indicates prior successful V1M submission.
+
+5. ORM THRESHOLD
+----------------
+ORM (Ongoing Responsibility for Medicals) threshold:
+  - paid_3 (medical paid amount) > $750.00
+  - Effective date: 01/01/2010
+  - Applies when insurer assumes ongoing responsibility for medical treatment
+  - WC and Non-WC claims use the same dollar threshold for medical payments
+
+6. TPOC THRESHOLD
+-----------------
+TPOC (Total Payment Obligation to Claimant) threshold:
+  - paid_1 (indemnity/settlement paid amount) > $0.00
+  - Effective date: 10/01/2011
+  - Any non-zero indemnity payment triggers TPOC evaluation
+  - Settlement and judgment payments map to TPOC pay code buckets
+
+7. LITIGATION EXCEPTION (WC OPEN CLAIMS)
+----------------------------------------
+For Workers Compensation open claims in active litigation:
+  - ORM reporting may be deferred until litigation resolves IF:
+    * claim_open = 1
+    * is_wc = 1
+    * Litigation flag is set in claim status
+    * No TPOC payment has been issued
+  - Once settlement occurs (paid_1 > 0), TPOC rules apply regardless of litigation
+  - Closed claims post-settlement follow standard TPOC extraction
+
+8. CLAIMANT ELIGIBILITY
+-----------------------
+  - SSN validation: 9-digit format, not all zeros, passes CMS validation rules
+  - US claimant (is_us_claimant = 1): required for standard RRE matching
+  - Non-US claimants: excluded unless valid Medicare Beneficiary match exists
+  - Age at event: Medicare eligibility typically age 65+, ESRD, ALS, or 24-month disability
+  - Under-65 claimants: evaluate ESRD/ALS/disability indicators before exclusion
+
+9. CMS BENEFICIARY DISPOSITION CODES
+------------------------------------
+  - 01 = Yes — matched Medicare beneficiary; reportable if thresholds met
+  - 51 = Not Matched — beneficiary not found in CMS database; may defer or exclude
+  - Other codes: follow CMS Section 111 User Guide for disposition handling
+
+10. RRE ASSIGNMENT HIERARCHY
+----------------------------
+Responsible Reporting Entity is assigned in order:
+  1. Primary insurer on policy (cont_num mapping)
+  2. TPA (Third Party Administrator) if insurer delegates reporting
+  3. Self-insured employer if no commercial carrier
+  4. Fallback: proc_unit default RRE mapping table
+If no RRE resolves at any level, claim is excluded (hard stop).
+
+11. WC vs NON-WC KEY DIFFERENCES
+--------------------------------
+  | Rule                    | WC                          | Non-WC                    |
+  |-------------------------|-----------------------------|-----------------------------|
+  | Pay code 390            | TPOC bucket                 | ORM bucket                  |
+  | ORM scope               | Medical-only ongoing        | Liability medical ongoing   |
+  | TPOC scope              | Indemnity/settlement        | Settlement/judgment         |
+  | Litigation exception    | Yes (open claims)           | Limited / case-by-case      |
+  | data_set typical values | WC                          | GL, AU, PF                  |
+
+12. EDGE CASES
+--------------
+  a) Under-65 ESRD/ALS: Report if beneficiary match (disposition 01) even if age < 65
+  b) Already transmitted (date_v1m_xmit set): Always include in extraction queue
+  c) Multi-layer claims: Each payment layer evaluated independently; highest threshold wins
+  d) BI to PD coverage switch: Re-evaluate ORM/TPOC when coverage changes mid-claim;
+     new pay codes may shift bucket assignment
+  e) Zero-dollar payments: Do not trigger TPOC; ORM requires paid_3 > $750
+  f) Closed claims with prior transmission: Updates only if payment or status changes
+
+13. V1M XML EXTRACTION
+----------------------
+Reportable claims are serialized to Section 111 XML schema and transmitted via
+viaOne Medicare (V1M) gateway. Required XML elements include:
+  - RRE ID, SSN/HICN, beneficiary disposition, ORM indicator, TPOC amount/date
+  - Claim key, date of incident, policy holder information
+  - Pay code, paid amounts (paid_1, paid_3), coverage codes
+
+END OF MCI REFERENCE

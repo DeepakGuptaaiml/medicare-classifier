@@ -1,0 +1,147 @@
+MEDICARE CLAIMS PROCESSING POLICY
+Enterprise Policy Manual — MMSEA Section 111 Compliance
+========================================================
+
+1. MEDICARE ELIGIBILITY CRITERIA
+--------------------------------
+An individual is eligible for Medicare benefits if they meet ANY of the following:
+
+  a) Age 65 or older (Primary eligibility)
+     - Initial Enrollment Period: 3 months before/after 65th birthday
+     - Part A (hospital) typically premium-free with sufficient work credits
+     - Part B (medical) requires premium enrollment
+
+  b) End Stage Renal Disease (ESRD) — any age
+     - Permanent kidney failure requiring dialysis or transplant
+     - Medicare eligibility begins 4th month of dialysis (exceptions apply)
+
+  c) Amyotrophic Lateral Sclerosis (ALS / Lou Gehrig's disease) — any age
+     - Medicare eligibility begins immediately upon SSDI approval
+     - No 24-month waiting period for ALS
+
+  d) Disability — 24 months of Social Security Disability Insurance (SSDI)
+     - Qualifying disability per SSA definition
+     - 24-month waiting period (waived for ALS and ESRD)
+
+2. MMSEA SECTION 111 OVERVIEW
+-----------------------------
+The Medicare, Medicaid, and SCHIP Extension Act (MMSEA) Section 111 requires
+Responsible Reporting Entities (RREs) to report information about Medicare beneficiaries
+who receive settlements, judgments, awards, or have ongoing medical responsibility
+from liability, workers' compensation, or no-fault insurance.
+
+WHO MUST REPORT (RREs):
+  - Insurers (commercial carriers)
+  - Third Party Administrators (TPAs)
+  - Self-insured entities (employers, municipalities)
+  - Group health plans (when applicable)
+
+WHAT MUST BE REPORTED:
+  - ORM: Ongoing Responsibility for Medicals — insurer responsible for ongoing treatment
+  - TPOC: Total Payment Obligation to Claimant — settlements, judgments, awards
+
+REPORTING DEADLINES:
+  - Initial ORM assumption: within 45 days of assuming responsibility
+  - TPOC payments: within 45 days of payment date (or per CMS quarterly schedule)
+  - Query response: within 45 days of CMS beneficiary match request
+
+PENALTIES FOR NON-COMPLIANCE:
+  - $1,000 per day per claim for failure to report
+  - $1,000 per day per claim for reporting untimely/inaccurate data
+  - Potential exclusion from federal programs for willful neglect
+
+3. ORM vs TPOC DEFINITIONS
+---------------------------
+ORM (Ongoing Responsibility for Medicals):
+  - Insurer has responsibility to pay for ongoing medical care related to the injury
+  - Triggered when medical payments exceed threshold (paid_3 > $750 effective 01/01/2010)
+  - Reporting continues until responsibility ends (settlement, claim closure, transfer)
+
+TPOC (Total Payment Obligation to Claimant):
+  - Total payment obligation to resolve the claim (settlement, judgment, award)
+  - Includes indemnity, structured settlements, and certain medical compromises
+  - Triggered when indemnity paid > $0 (effective 10/01/2011)
+  - Must report payment amount and date
+
+4. CLAIM SUBMISSION REQUIREMENTS
+--------------------------------
+Required fields for Medicare Section 111 claims reporting:
+  - Beneficiary: SSN or HICN, name, date of birth, gender
+  - RRE: TIN, office code, reporting entity name
+  - Incident: date of incident, alleged cause of injury
+  - Insurance: policy number, claim number, state of jurisdiction
+  - ORM indicator and dates; TPOC amount and date if applicable
+
+Documentation checklist:
+  - Proof of Medicare beneficiary status (CMS query response)
+  - Payment records supporting TPOC amount
+  - Medical records supporting ORM assumption
+  - Settlement agreement or court order (for TPOC)
+  - RRE authorization and TIN verification
+
+Timelines:
+  - Report ORM within 45 days of assuming medical responsibility
+  - Report TPOC within 45 days of payment obligation determination
+  - Respond to CMS queries within required timeframe
+
+5. FRAUD INDICATORS
+-------------------
+Watch for the following red flags in Medicare-related claims:
+  - Billing for services not rendered or not medically necessary
+  - Upcoding procedure codes (billing higher complexity than performed)
+  - Duplicate billing across payers or claim lines
+  - Unbundling services that should be billed as a single procedure
+  - Provider kickbacks or patient referral schemes
+  - Misrepresenting injury causation to shift payment to Medicare
+
+Refer suspected fraud to Special Investigations Unit (SIU) and CMS as required.
+
+6. DENIAL REASONS AND APPEAL PROCESS
+------------------------------------
+Common Medicare denial codes:
+  - CO-4: Procedure code inconsistent with modifier
+  - CO-16: Claim lacks required information
+  - CO-18: Duplicate claim/service
+  - CO-29: Time limit for filing has expired
+  - CO-50: Non-covered service
+  - CO-96: Non-covered charge(s)
+
+Appeal timeline:
+  - Redetermination: 120 days from denial date (Level 1)
+  - Reconsideration by QIC: 180 days from redetermination (Level 2)
+  - Administrative Law Judge (ALJ): 60 days from QIC decision (Level 3)
+  - Medicare Appeals Council (DAB): 60 days from ALJ decision (Level 4)
+  - Federal District Court: 60 days from DAB decision (Level 5)
+
+7. HIPAA COMPLIANCE
+-------------------
+Protected Health Information (PHI) handling requirements:
+  - Minimum necessary standard: access only PHI required for the task
+  - Business Associate Agreements (BAAs) required with all vendors handling PHI
+  - Encryption in transit (TLS 1.2+) and at rest for PHI storage
+  - Audit logging of all PHI access
+  - Breach notification within 60 days of discovery
+  - Workforce training annually on HIPAA Privacy and Security Rules
+
+Note: Production RAG/LLM systems must use Azure OpenAI within the tenant boundary
+to maintain HIPAA compliance — external LLM APIs must not receive PHI.
+
+8. COORDINATION OF BENEFITS
+---------------------------
+Medicare as primary vs secondary payer:
+  - WC and liability insurance typically pay primary for WC/liability-related treatment
+  - Medicare is secondary when WC/liability is primary payer
+  - Medicare Conditional Payments: CMS may pay conditionally and seek reimbursement
+    when primary payer settlement occurs
+
+Workers Comp Medicare Set-Aside (WCMSA):
+  - Portion of settlement allocated for future Medicare-covered medical expenses
+  - Required when Medicare beneficiary and settlement closes future medicals
+  - CMS review recommended for settlements > threshold amounts
+
+Conditional payments and reimbursement:
+  - Medicare may pay claims conditionally when primary payer delays payment
+  - Upon TPOC settlement, RRE must reimburse Medicare for conditional payments
+  - CMS Recovery Contractor (CRC) pursues recovery on behalf of Medicare
+
+END OF CLAIMS PROCESSING POLICY

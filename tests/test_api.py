@@ -1,7 +1,9 @@
 import joblib
 import pytest
 from fastapi.testclient import TestClient
+from unittest.mock import MagicMock
 
+import app.main as main_module
 from app.main import app
 from app.preprocess import predict_medicare
 
@@ -36,6 +38,43 @@ def sample_payload():
         "days_open": 0.0,
         "age_at_event": 70.5,
     }
+
+
+@pytest.fixture
+def mock_rag_agent(monkeypatch):
+    """Mock RAG agent so CI tests do not call Hugging Face APIs."""
+    fake = MagicMock()
+    fake.get_status.return_value = {
+        "documents_loaded": 3,
+        "vector_store_ready": True,
+        "llm_ready": True,
+    }
+
+    def _ask(question: str, max_chunks: int = 3):
+        if "quantum physics" in question.lower():
+            return {
+                "question": question,
+                "answer": "I cannot find this in the policy documents.",
+                "sources": [],
+                "chunks_used": [],
+            }
+        return {
+            "question": question,
+            "answer": (
+                "ORM threshold for WC claims: paid_3 (medical paid) must exceed "
+                "$750.00, effective 01/01/2010 (mci_reference.txt)."
+            ),
+            "sources": ["mci_reference.txt"],
+            "chunks_used": ["ORM threshold: paid_3 > $750.00 effective 01/01/2010"],
+        }
+
+    fake.ask.side_effect = _ask
+    monkeypatch.setenv("HF_API_TOKEN", "test-token-for-ci")
+    monkeypatch.setattr(main_module, "HF_API_TOKEN", "test-token-for-ci")
+    monkeypatch.setattr(main_module, "get_rag_agent", lambda: fake)
+    main_module._rag_agent = None
+    yield fake
+    main_module._rag_agent = None
 
 
 def test_health(client):
@@ -79,3 +118,77 @@ def test_predict_preprocess_unit(sample_payload):
     )
     assert label in (0, 1)
     assert 0.0 <= proba <= 1.0
+
+
+def test_rag_status_endpoint(client):
+    response = client.get("/rag/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["documents_loaded"] == 3
+    assert "status" in body
+
+
+def test_rag_status_endpoint_loaded(mock_rag_agent, client):
+    main_module._rag_agent = mock_rag_agent
+    response = client.get("/rag/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] in ("ok", "ready_to_load")
+
+
+def test_ask_valid_question(mock_rag_agent, client):
+    response = client.post(
+        "/ask",
+        json={"question": "What are the ORM threshold rules for WC claims?"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "ORM" in body["answer"]
+    assert body["processing_time_ms"] > 0
+
+
+def test_ask_empty_question(client, mock_rag_agent):
+    response = client.post("/ask", json={"question": ""})
+    assert response.status_code == 422
+
+
+def test_ask_response_has_sources(mock_rag_agent, client):
+    response = client.post(
+        "/ask",
+        json={"question": "What is MMSEA Section 111?"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body["sources"], list)
+    assert len(body["sources"]) >= 1
+
+
+def test_ask_processing_time(mock_rag_agent, client):
+    response = client.post(
+        "/ask",
+        json={"question": "What are the pay code differences between WC and Non-WC?"},
+    )
+    assert response.status_code == 200
+    assert response.json()["processing_time_ms"] > 0
+
+
+def test_ask_out_of_scope(mock_rag_agent, client):
+    response = client.post(
+        "/ask",
+        json={"question": "Explain quantum physics in detail"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "cannot find" in body["answer"].lower()
+
+
+def test_ask_without_hf_token(monkeypatch, client):
+    monkeypatch.delenv("HF_API_TOKEN", raising=False)
+    monkeypatch.setattr(main_module, "HF_API_TOKEN", "")
+    main_module._rag_agent = None
+    response = client.post(
+        "/ask",
+        json={"question": "What is MMSEA Section 111?"},
+    )
+    assert response.status_code == 503
+    assert "HF_API_TOKEN" in response.json()["detail"]

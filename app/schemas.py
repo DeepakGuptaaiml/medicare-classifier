@@ -44,3 +44,24 @@ class ModelInfoResponse(BaseModel):
     target: str
     feature_count: int
     metrics_test: dict
+
+
+class AskRequest(BaseModel):
+    question: str = Field(..., min_length=1, description="Medicare policy question")
+    max_chunks: int = Field(3, ge=1, le=10, description="Number of context chunks to retrieve")
+
+
+class AskResponse(BaseModel):
+    question: str
+    answer: str
+    sources: list[str]
+    chunks_used: list[str]
+    model_used: str
+    processing_time_ms: float
+
+
+class RAGStatusResponse(BaseModel):
+    status: str
+    documents_loaded: int
+    vector_store_ready: bool
+    llm_ready: bool

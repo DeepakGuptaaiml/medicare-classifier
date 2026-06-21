@@ -86,16 +86,21 @@ Install Python 3.12 on Mac if needed: `brew install python@3.12`
 | `.github/workflows/deploy-azure.yml` | CD to `medicare-classifier-api` / `medicare-classifier-ui` |
 | `docs/AZURE_*.md` | Azure bootstrap + CD setup |
 
-### Run locally
+### Run locally (classifier only)
+
+Use **`requirements-api-local.txt`** — no Python 3.12 or Hugging Face token needed.
+RAG Policy Q&A runs on **Azure only** (see Phase 3 below).
 
 ```bash
-cd medicare_classifier
+cd /Users/deepakgupta/Documents/medicare_classifier
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements-api.txt
+pip install -r requirements-api-local.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-Second terminal:
+Or: `./scripts/run-local-api.sh`
+
+Second terminal (Streamlit → local API):
 
 ```bash
 pip install -r requirements-streamlit.txt
@@ -122,3 +127,38 @@ pytest tests/ -v
 ### SHAP (deferred)
 
 SHAP explainability is Phase 1 notebook only for now. Docker/CI use Python 3.12 so SHAP can be added later without changing the deployment stack.
+
+## Phase 3 — RAG Policy Q&A Agent (Azure only)
+
+| Artifact | Description |
+|----------|-------------|
+| `agent/rag_agent.py` | LangChain RetrievalQA over policy documents |
+| `agent/docs/*.txt` | MCI, MCRC, and claims policy reference docs |
+| `POST /ask` | RAG-powered Medicare policy Q&A |
+| `GET /rag/status` | RAG agent readiness check |
+| Streamlit **Policy Q&A** tab | Chat UI calling `/ask` |
+
+**Local RAG skipped** — ChromaDB/LangChain need Python 3.12; your Mac has 3.14 and Homebrew 3.12 fails on macOS 13. RAG runs in the **Azure Docker container** (Python 3.12) instead.
+
+### Enable RAG on Azure
+
+1. GitHub → **medicare-classifier** → **Settings** → **Secrets** → add **`HF_API_TOKEN`**
+   (token from https://huggingface.co/settings/tokens)
+2. Push RAG code to `main` (if not already) → CI/CD deploys to `medicare-classifier-api`
+3. CD sets `HF_API_TOKEN` on the API Container App automatically
+
+### Test RAG (Azure)
+
+Replace `<API_FQDN>` with your live API URL:
+
+```bash
+curl https://<API_FQDN>/rag/status
+
+curl -X POST https://<API_FQDN>/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What are the ORM threshold rules for WC claims?"}'
+```
+
+Or open **medicare-classifier-ui** → **Policy Q&A** tab (sidebar must show Connected to API).
+
+> **Production note:** Replace HuggingFace endpoints with **Azure OpenAI Service** for HIPAA compliance.

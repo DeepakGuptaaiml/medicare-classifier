@@ -46,6 +46,20 @@ CD **updates** existing Container Apps; it does not create them. Bootstrap once:
 
 Or add `GHCR_TOKEN` + `GHCR_USER` secrets (same as claims-intelligence).
 
+### Hugging Face token (RAG agent)
+
+Add GitHub secret **`HF_API_TOKEN`** with a [Hugging Face access token](https://huggingface.co/settings/tokens) (Inference API scope).
+
+CD workflow automatically:
+1. Sets `hf-api-token` secret on **`medicare-classifier-api`**
+2. Maps env var `HF_API_TOKEN=secretref:hf-api-token`
+
+For manual Portal setup: **medicare-classifier-api** → **Containers** → add env var `HF_API_TOKEN`.
+
+RAG endpoints:
+- `GET /rag/status` — agent readiness
+- `POST /ask` — policy Q&A
+
 ---
 
 ## What happens on each push to `main`
@@ -71,3 +85,69 @@ For medicare-classifier specifically, confirm app names in `deploy-azure.yml` ma
 
 - `medicare-classifier-api`
 - `medicare-classifier-ui`
+
+---
+
+## Troubleshooting — `SyntaxError: Unexpected non-whitespace character after JSON`
+
+**Symptom (Deploy to Azure → Log in to Azure):**
+```
+Login failed with SyntaxError: Unexpected non-whitespace character after JSON at position 10
+Double check if the 'auth-type' is correct.
+```
+
+**Cause:** The **`AZURE_CREDENTIALS`** secret value is **not valid JSON**. The `azure/login@v2` action expects a single JSON object — nothing before `{`, nothing after `}`.
+
+**Common copy/paste mistakes:**
+
+| Mistake | Example |
+|---------|---------|
+| Label prefix in the value | `AZURE_CREDENTIALS={"clientId": ...}` |
+| Markdown / backticks | ` ```json {"clientId": ...} ``` ` |
+| Smart quotes from Word/Notes | `"clientId"` (curly quotes) |
+| Trailing comma on last field | `"tenantId": "...",}` |
+| Only the client secret pasted | `abc~8Q~longString...` (not JSON) |
+| Secret ID instead of full JSON | Single GUID only |
+| Two JSON blobs concatenated | `{...}{...}` |
+
+**Fix:**
+
+1. GitHub → **medicare-classifier** → **Settings** → **Secrets and variables** → **Actions**
+2. **Edit** `AZURE_CREDENTIALS` (or delete and recreate)
+3. Paste **only** this shape (replace with your real values from Entra ID + Subscriptions):
+
+```json
+{
+  "clientId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "clientSecret": "abc~8Q~pasteValueColumnFromPortal",
+  "subscriptionId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "tenantId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+}
+```
+
+**Rules:**
+- Double quotes `"` only (straight quotes, not curly)
+- No trailing comma after `tenantId`
+- `clientSecret` = **Value** column from Portal (not Secret ID)
+- `subscriptionId` = Subscription **GUID** from Portal → Subscriptions
+- No extra spaces or text outside the `{ ... }`
+
+4. **Actions** → **Deploy to Azure** → **Re-run all jobs**
+
+**If you no longer have the original JSON:** rebuild from Portal (App registration → Overview + Certificates & secrets → Subscriptions) or run in **Azure Cloud Shell**:
+
+```bash
+az login
+SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+az ad sp list --display-name "github-claims-intelligence-cd" --query "[0].appId" -o tsv
+# Create NEW client secret in Portal if needed, then assemble JSON manually
+```
+
+**Validate locally** (Mac Terminal — paste JSON into a file, do not commit):
+
+```bash
+python3 -c 'import json; json.load(open("azure-creds.json"))' && echo "JSON OK"
+```
+
+**Note:** `auth-type` is correct in our workflow (`creds:` JSON is the default). The error is almost always malformed secret content, not the workflow YAML.
+

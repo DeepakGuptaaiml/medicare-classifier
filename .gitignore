@@ -16,4 +16,8 @@ __pycache__/
 
 # Env secrets
 .env
-.env.*
+.env.local
+!.env.example
+
+# RAG vector store (built at runtime)
+agent/chroma_db/

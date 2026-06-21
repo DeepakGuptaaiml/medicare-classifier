@@ -1,0 +1,126 @@
+MEDICARE CLAIMS RESERVE CALCULATION (MCRC) REFERENCE
+Automatic Predictive Reserve Process — Decision Engine Integration
+===================================================================
+
+1. OVERVIEW
+-----------
+The MCRC module calculates automatic predictive reserves for Medicare-eligible
+Workers Compensation Medical-Only (MO) claims. Reserves are computed via an external
+decision engine web service and written back to the claim financial record subject
+to guardrails and sufficiency checks.
+
+2. FIVE-STAGE AUTOMATIC RESERVE PROCESS
+---------------------------------------
+
+STAGE 1 — EVENT IDENTIFICATION (Change-Audit Framework)
+  - Monitors claim database for qualifying change events
+  - Triggers: new MO claim, diagnosis update, jurisdiction change, CMS report date set
+  - Event rules configurable per carrier (enable/disable event types)
+  - Only fires when claim meets preliminary scope filters
+
+STAGE 2 — ELIGIBILITY FILTER + ATTRIBUTE ASSEMBLY (Batch)
+  - Batch job collects eligible claims nightly (or real-time for high-priority events)
+  - Scope filters applied (see Section 3)
+  - Assembles model input attribute payload for decision engine call
+  - Validates required fields present before Stage 3
+
+STAGE 3 — EXTERNAL DECISION ENGINE CALL (Web Service)
+  - SOAP/REST call to configured predictive reserve web service
+  - Sends model inputs (see Section 4)
+  - Timeout and retry policy per configuration
+  - Returns recommended reserve amounts by bucket
+
+STAGE 4 — RESPONSE HANDLING (Violation / Warning / Info)
+  - Violation: Hard stop — do not write reserve; log error for adjuster review
+  - Warning: Write reserve with system note flagging adjuster review required
+  - Info: Standard successful response — proceed to Stage 5 if guardrails pass
+
+STAGE 5 — WRITE-BACK GUARDRAILS
+  - Final validation before persisting reserve to claim financials
+  - Sufficiency check, hard stops, carrier approval gates (see Sections 6-7)
+  - On success: write reserve + system note on claim
+
+3. SCOPE — ELIGIBLE CLAIMS ONLY
+-------------------------------
+Automatic reserve calculation applies ONLY when ALL of the following are true:
+  - Line of business: Workers Compensation (WC)
+  - Claim type: Medical-Only (MO) — claim_type = 'MO'
+  - Claim status: Open (claim_open = 1)
+  - Current reserve = 0 (no existing reserve set)
+  - Not excluded by hard stops (see Section 7)
+
+Claims with existing reserves, closed claims, indemnity claims, and Non-WC lines
+are OUT OF SCOPE for automatic MCRC processing.
+
+4. MODEL INPUTS SENT TO DECISION ENGINE
+---------------------------------------
+The following attributes are assembled and transmitted to the external web service:
+
+  - our_cause_2: Injury cause code (e.g., fall, motor vehicle, struck by object)
+  - our_cause_3: Nature/result of injury — diagnosis-like primary driver
+  - our_cause_4: Body part affected (e.g., lower back, knee, shoulder)
+  - state_juris: State of jurisdiction (affects benefit levels and medical costs)
+  - claim_type: Must be 'MO' for MCRC scope
+  - date_rpted_cms: Date reported to CMS — Medicare-specific input for reserve modeling
+
+These inputs mirror features used in actuarial severity models calibrated on
+Medicare-eligible WC medical-only populations.
+
+5. RESERVE BUCKETS
+------------------
+  - Medical reserve: bucket [3] — primary output of MCRC for MO claims
+  - Expense reserve: bucket [6] — allocated expense load if returned by engine
+  - Indemnity reserve: bucket [1] — NEVER auto-set by MCRC (MO claims have no indemnity)
+
+Write-back applies Medical [3] and Expense [6] only. Indemnity [1] is excluded
+from automatic MCRC output by design.
+
+6. SUFFICIENCY CHECK
+--------------------
+Before write-back, the system validates:
+  reserve >= paid + scheduled + deductible
+
+Where:
+  - paid: total paid to date in the reserve bucket
+  - scheduled: scheduled future payments on file
+  - deductible: applicable deductible amount
+
+If proposed reserve fails sufficiency, a Violation is returned and no write occurs.
+
+7. HARD STOPS (NO AUTOMATIC WRITE)
+----------------------------------
+  a) Existing reserve or active reserve worksheet on claim
+  b) Pending reserve transaction in workflow queue
+  c) Insufficient incurred vs paid + scheduled + deductible
+  d) Large deductible requiring carrier home office approval
+  e) Coverage limit or claim limit exceeded
+  f) Claim flagged for manual review (litigation, fraud, subrogation)
+
+8. OUTCOMES
+-----------
+  - Active (A): Reserve written successfully; claim financials updated
+  - Pending (P): Queued for adjuster approval before write
+  - Error: Decision engine or validation failure; no write
+  - Zero amounts: Engine returned $0 — no write; log Info message
+
+9. SYSTEM NOTE ON SUCCESSFUL SAVE
+---------------------------------
+When reserve is successfully written, the system adds a claim note:
+  "Automatic Medicare predictive reserve applied by MCRC. Amount: $[X] Medical [3].
+   Engine version: [version]. Date: [timestamp]."
+
+10. CONFIGURATION
+-----------------
+  - Model enablement: carrier-level flag to turn MCRC on/off
+  - Web service settings: endpoint URL, credentials, timeout, retry count
+  - Event rules: which change-audit events trigger Stage 1
+  - Batch schedule: nightly vs intraday frequency
+  - Minimum reserve threshold: suppress writes below configurable floor
+
+11. INTEGRATION WITH MCI (MEDICARE REPORTING)
+---------------------------------------------
+  - date_rpted_cms links MCRC to MCI reporting timeline
+  - Claims reported to CMS may trigger MCRC re-evaluation
+  - Reserve adequacy supports MMSEA Section 111 compliance documentation
+
+END OF MCRC REFERENCE

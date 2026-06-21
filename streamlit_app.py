@@ -7,6 +7,15 @@ import streamlit as st
 
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 
+SAMPLE_QUESTIONS = [
+    "What are the ORM threshold rules for WC claims?",
+    "When is a claim excluded from Medicare reporting?",
+    "What is the litigation exception?",
+    "How is the automatic reserve calculated?",
+    "What is MMSEA Section 111?",
+    "What are the pay code differences between WC and Non-WC?",
+]
+
 st.set_page_config(page_title="Medicare Classifier", page_icon="🏛️", layout="wide")
 
 st.title("Medicare Classifier")
@@ -27,6 +36,16 @@ def fetch_model_info() -> dict:
     response = requests.get(f"{API_URL}/model/info", timeout=10)
     response.raise_for_status()
     return response.json()
+
+
+def fetch_rag_status() -> dict | None:
+    try:
+        response = requests.get(f"{API_URL}/rag/status", timeout=10)
+        if response.status_code == 200:
+            return response.json()
+    except requests.RequestException:
+        return None
+    return None
 
 
 def check_health() -> tuple[bool, str]:
@@ -58,6 +77,10 @@ def load_random_claim() -> None:
     st.session_state.pop("sample_load_error", None)
     _apply_sample_to_session(sample)
     st.session_state["loaded_sample"] = sample
+
+
+def set_sample_question(question: str) -> None:
+    st.session_state["policy_question"] = question
 
 
 def init_form_defaults() -> None:
@@ -104,6 +127,10 @@ with st.sidebar:
                 st.json(metrics)
         except requests.RequestException as exc:
             st.warning(f"Could not load model info: {exc}")
+        rag_status = fetch_rag_status()
+        if rag_status:
+            st.markdown("**RAG Agent**")
+            st.caption(f"Status: `{rag_status.get('status', 'unknown')}`")
     else:
         st.error("API unavailable")
         st.markdown(f"**Error:** {health_detail}")
@@ -117,100 +144,171 @@ except requests.RequestException as exc:
 
 init_form_defaults()
 
-with st.expander("Load sample claim from training data"):
-    st.button("Fill form from random claim", key="load_sample_btn", on_click=load_random_claim)
-    if err := st.session_state.get("sample_load_error"):
-        st.error(f"Could not load sample claim: {err}")
-    if sample := st.session_state.get("loaded_sample"):
-        st.info("Form filled with a random claim from training data.")
-        st.json(sample)
+tab_classifier, tab_policy = st.tabs(["Medicare Classifier", "Policy Q&A"])
 
-col1, col2 = st.columns(2)
+with tab_classifier:
+    with st.expander("Load sample claim from training data"):
+        st.button("Fill form from random claim", key="load_sample_btn", on_click=load_random_claim)
+        if err := st.session_state.get("sample_load_error"):
+            st.error(f"Could not load sample claim: {err}")
+        if sample := st.session_state.get("loaded_sample"):
+            st.info("Form filled with a random claim from training data.")
+            st.json(sample)
 
-with col1:
-    st.subheader("Claim & Pay Code")
-    data_set = st.selectbox("Data set", options["data_set"], key="data_set")
-    pay_cat = st.selectbox("Pay category", options["pay_cat"], key="pay_cat")
-    pay_type = st.selectbox("Pay type", options["pay_type"], key="pay_type")
-    pay_code_bucket = st.selectbox(
-        "Pay code bucket", options["pay_code_bucket"], key="pay_code_bucket"
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("Claim & Pay Code")
+        data_set = st.selectbox("Data set", options["data_set"], key="data_set")
+        pay_cat = st.selectbox("Pay category", options["pay_cat"], key="pay_cat")
+        pay_type = st.selectbox("Pay type", options["pay_type"], key="pay_type")
+        pay_code_bucket = st.selectbox(
+            "Pay code bucket", options["pay_code_bucket"], key="pay_code_bucket"
+        )
+        pay_code = st.number_input("Pay code", min_value=0, step=1, key="pay_code")
+        proc_unit = st.number_input("Proc unit", min_value=0, step=1, key="proc_unit")
+        cont_num = st.number_input("Contract number", min_value=0, step=1, key="cont_num")
+        claim_open = st.selectbox("Claim open", [1, 0], key="claim_open")
+
+    with col2:
+        st.subheader("Payments & Flags")
+        paid_1 = st.number_input("Paid 1 (indemnity)", min_value=0.0, key="paid_1")
+        paid_3 = st.number_input("Paid 3 (medical)", min_value=0.0, key="paid_3")
+        amount = st.number_input("Amount", min_value=0.01, key="amount")
+        age_at_event = st.number_input(
+            "Age at event", min_value=0.0, max_value=120.0, key="age_at_event"
+        )
+        days_open = st.number_input("Days open", min_value=0.0, key="days_open")
+        date_v1m_xmit_flag = st.selectbox("V1M transmitted", [0, 1], key="date_v1m_xmit_flag")
+        is_us_claimant = st.selectbox("US claimant", [1, 0], key="is_us_claimant")
+        is_wc = st.selectbox("Workers comp (WC)", [1, 0], key="is_wc")
+
+    col3, col4 = st.columns(2)
+    with col3:
+        orm_threshold_met = st.selectbox(
+            "ORM threshold met (paid_3 > 750)", [0, 1], key="orm_threshold_met"
+        )
+        tpoc_threshold_met = st.selectbox(
+            "TPOC threshold met (paid_1 > 0)", [0, 1], key="tpoc_threshold_met"
+        )
+    with col4:
+        is_excluded_coverage = st.selectbox(
+            "Excluded coverage", [0, 1], key="is_excluded_coverage"
+        )
+        is_excluded_line = st.selectbox("Excluded line", [0, 1], key="is_excluded_line")
+
+    payload = {
+        "data_set": data_set,
+        "pay_cat": pay_cat,
+        "pay_code": int(pay_code),
+        "pay_type": pay_type,
+        "paid_1": float(paid_1),
+        "paid_3": float(paid_3),
+        "amount": float(amount),
+        "proc_unit": int(proc_unit),
+        "cont_num": int(cont_num),
+        "claim_open": int(claim_open),
+        "date_v1m_xmit_flag": int(date_v1m_xmit_flag),
+        "is_us_claimant": int(is_us_claimant),
+        "orm_threshold_met": int(orm_threshold_met),
+        "tpoc_threshold_met": int(tpoc_threshold_met),
+        "is_wc": int(is_wc),
+        "pay_code_bucket": pay_code_bucket,
+        "is_excluded_coverage": int(is_excluded_coverage),
+        "is_excluded_line": int(is_excluded_line),
+        "days_open": float(days_open),
+        "age_at_event": float(age_at_event),
+    }
+
+    st.divider()
+
+    if st.button("Classify Claim", type="primary", use_container_width=True):
+        with st.spinner("Calling classification API..."):
+            try:
+                response = requests.post(f"{API_URL}/predict", json=payload, timeout=15)
+                response.raise_for_status()
+                result = response.json()
+            except requests.RequestException as exc:
+                st.error(f"Prediction failed: {exc}")
+                if hasattr(exc, "response") and exc.response is not None:
+                    st.code(exc.response.text)
+                st.stop()
+
+        if result["is_medicare_reportable"] == 1:
+            st.success(f"**{result['label']}** — probability {result['probability']:.1%}")
+        else:
+            st.warning(f"**{result['label']}** — probability {result['probability']:.1%}")
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Prediction", result["label"])
+        m2.metric("Probability", f"{result['probability']:.1%}")
+        m3.metric("Model", result.get("model_name", "—"))
+
+        st.subheader("Request payload")
+        st.json(payload)
+
+with tab_policy:
+    st.header("Medicare Policy Q&A Agent")
+    st.subheader("Ask questions about MMSEA Section 111 rules")
+
+    st.markdown("**Sample questions** (click to fill):")
+    sample_cols = st.columns(2)
+    for idx, question in enumerate(SAMPLE_QUESTIONS):
+        with sample_cols[idx % 2]:
+            st.button(
+                question,
+                key=f"sample_q_{idx}",
+                on_click=set_sample_question,
+                args=(question,),
+                use_container_width=True,
+            )
+
+    if "policy_question" not in st.session_state:
+        st.session_state["policy_question"] = ""
+
+    policy_question = st.text_input(
+        "Your question",
+        key="policy_question",
+        placeholder="e.g. What are the ORM threshold rules for WC claims?",
     )
-    pay_code = st.number_input("Pay code", min_value=0, step=1, key="pay_code")
-    proc_unit = st.number_input("Proc unit", min_value=0, step=1, key="proc_unit")
-    cont_num = st.number_input("Contract number", min_value=0, step=1, key="cont_num")
-    claim_open = st.selectbox("Claim open", [1, 0], key="claim_open")
 
-with col2:
-    st.subheader("Payments & Flags")
-    paid_1 = st.number_input("Paid 1 (indemnity)", min_value=0.0, key="paid_1")
-    paid_3 = st.number_input("Paid 3 (medical)", min_value=0.0, key="paid_3")
-    amount = st.number_input("Amount", min_value=0.01, key="amount")
-    age_at_event = st.number_input("Age at event", min_value=0.0, max_value=120.0, key="age_at_event")
-    days_open = st.number_input("Days open", min_value=0.0, key="days_open")
-    date_v1m_xmit_flag = st.selectbox("V1M transmitted", [0, 1], key="date_v1m_xmit_flag")
-    is_us_claimant = st.selectbox("US claimant", [1, 0], key="is_us_claimant")
-    is_wc = st.selectbox("Workers comp (WC)", [1, 0], key="is_wc")
+    if st.button("Ask Policy Question", type="primary", use_container_width=True):
+        if not policy_question.strip():
+            st.warning("Please enter a question.")
+        else:
+            with st.spinner("Retrieving policy context and generating answer..."):
+                try:
+                    response = requests.post(
+                        f"{API_URL}/ask",
+                        json={"question": policy_question.strip(), "max_chunks": 3},
+                        timeout=120,
+                    )
+                    if response.status_code == 503:
+                        st.error(response.json().get("detail", "RAG agent unavailable"))
+                    else:
+                        response.raise_for_status()
+                        result = response.json()
+                        st.session_state["last_ask_result"] = result
+                except requests.RequestException as exc:
+                    st.error(f"Policy Q&A failed: {exc}")
+                    if hasattr(exc, "response") and exc.response is not None:
+                        st.code(exc.response.text)
 
-col3, col4 = st.columns(2)
-with col3:
-    orm_threshold_met = st.selectbox("ORM threshold met (paid_3 > 750)", [0, 1], key="orm_threshold_met")
-    tpoc_threshold_met = st.selectbox("TPOC threshold met (paid_1 > 0)", [0, 1], key="tpoc_threshold_met")
-with col4:
-    is_excluded_coverage = st.selectbox("Excluded coverage", [0, 1], key="is_excluded_coverage")
-    is_excluded_line = st.selectbox("Excluded line", [0, 1], key="is_excluded_line")
-
-payload = {
-    "data_set": data_set,
-    "pay_cat": pay_cat,
-    "pay_code": int(pay_code),
-    "pay_type": pay_type,
-    "paid_1": float(paid_1),
-    "paid_3": float(paid_3),
-    "amount": float(amount),
-    "proc_unit": int(proc_unit),
-    "cont_num": int(cont_num),
-    "claim_open": int(claim_open),
-    "date_v1m_xmit_flag": int(date_v1m_xmit_flag),
-    "is_us_claimant": int(is_us_claimant),
-    "orm_threshold_met": int(orm_threshold_met),
-    "tpoc_threshold_met": int(tpoc_threshold_met),
-    "is_wc": int(is_wc),
-    "pay_code_bucket": pay_code_bucket,
-    "is_excluded_coverage": int(is_excluded_coverage),
-    "is_excluded_line": int(is_excluded_line),
-    "days_open": float(days_open),
-    "age_at_event": float(age_at_event),
-}
-
-st.divider()
-
-if st.button("Classify Claim", type="primary", use_container_width=True):
-    with st.spinner("Calling classification API..."):
-        try:
-            response = requests.post(f"{API_URL}/predict", json=payload, timeout=15)
-            response.raise_for_status()
-            result = response.json()
-        except requests.RequestException as exc:
-            st.error(f"Prediction failed: {exc}")
-            if hasattr(exc, "response") and exc.response is not None:
-                st.code(exc.response.text)
-            st.stop()
-
-    if result["is_medicare_reportable"] == 1:
-        st.success(f"**{result['label']}** — probability {result['probability']:.1%}")
-    else:
-        st.warning(f"**{result['label']}** — probability {result['probability']:.1%}")
-
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Prediction", result["label"])
-    m2.metric("Probability", f"{result['probability']:.1%}")
-    m3.metric("Model", result.get("model_name", "—"))
-
-    st.subheader("Request payload")
-    st.json(payload)
+    if result := st.session_state.get("last_ask_result"):
+        st.info(f"**Answer:** {result['answer']}")
+        if result.get("sources"):
+            st.success(f"**Sources:** {', '.join(result['sources'])}")
+        st.caption(
+            f"Model: `{result.get('model_used', '—')}` · "
+            f"Processed in {result.get('processing_time_ms', 0):.0f} ms"
+        )
+        with st.expander("View source context"):
+            for idx, chunk in enumerate(result.get("chunks_used", []), start=1):
+                st.markdown(f"**Chunk {idx}**")
+                st.text(chunk)
 
 st.markdown("---")
 st.caption(
-    "Architecture: Streamlit UI → FastAPI `/predict` → `medicare_classifier.pkl` | "
+    "Architecture: Streamlit UI → FastAPI `/predict` + `/ask` → ML model + RAG agent | "
     "Swagger docs at `/docs` on the API server"
 )

@@ -5,6 +5,10 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
+    environment:
+      - HF_API_TOKEN=${HF_API_TOKEN}
+    volumes:
+      - ./agent/chroma_db:/app/agent/chroma_db
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
       interval: 30s
@@ -19,5 +23,6 @@ services:
       - "8501:8501"
     environment:
       - API_URL=http://api:8000
+      - HF_API_TOKEN=${HF_API_TOKEN}
     depends_on:
       - api

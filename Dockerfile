@@ -2,11 +2,19 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# ChromaDB / onnxruntime build deps on slim image
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements-api.txt .
 RUN pip install --no-cache-dir -r requirements-api.txt
 
 COPY app/ ./app/
 COPY models/ ./models/
+COPY agent/ ./agent/
+
+ENV HF_API_TOKEN=""
 
 EXPOSE 8000
 

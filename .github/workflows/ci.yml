@@ -26,6 +26,8 @@ jobs:
           pip install pytest httpx
 
       - name: Run tests
+        env:
+          HF_API_TOKEN: ${{ secrets.HF_API_TOKEN }}
         run: pytest tests/ -v
 
   docker-api:
@@ -69,10 +71,25 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Smoke test API container
+        env:
+          HF_API_TOKEN: ${{ secrets.HF_API_TOKEN }}
         run: |
-          docker run -d --name api-test -p 8000:8000 ${{ steps.build.outputs.imageid }}
-          sleep 10
+          docker run -d --name api-test -p 8000:8000 \
+            -e HF_API_TOKEN="${HF_API_TOKEN:-}" \
+            ${{ steps.build.outputs.imageid }}
+          sleep 15
           curl -f http://localhost:8000/health
+          curl -f http://localhost:8000/rag/status
+          if [ -n "$HF_API_TOKEN" ]; then
+            curl -sf -X POST http://localhost:8000/ask \
+              -H "Content-Type: application/json" \
+              -d '{"question": "What is MMSEA Section 111?"}'
+          else
+            code=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8000/ask \
+              -H "Content-Type: application/json" \
+              -d '{"question": "What is MMSEA Section 111?"}')
+            test "$code" = "503"
+          fi
           docker stop api-test
 
   docker-streamlit:

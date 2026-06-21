@@ -75,6 +75,20 @@ jobs:
             echo "GHCR_TOKEN not set — assuming public GHCR packages"
           fi
 
+      - name: Configure HF API token on API Container App
+        if: ${{ secrets.HF_API_TOKEN != '' }}
+        env:
+          HF_API_TOKEN: ${{ secrets.HF_API_TOKEN }}
+        run: |
+          az containerapp secret set \
+            --name "${{ env.API_APP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --secrets hf-api-token="$HF_API_TOKEN"
+          az containerapp update \
+            --name "${{ env.API_APP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --set-env-vars HF_API_TOKEN=secretref:hf-api-token
+
       - name: Deploy API Container App
         run: |
           az containerapp update \
@@ -101,6 +115,8 @@ jobs:
           sleep 20
           curl -sf "https://${FQDN}/health"
           curl -sf "https://${FQDN}/model/sample" | head -c 200
+          echo ""
+          curl -sf "https://${FQDN}/rag/status"
           echo ""
 
       - name: Deployment summary
