@@ -22,7 +22,7 @@ def get_hf_api_token() -> str:
 
 
 RAG_DOCS_PATH: Path = BASE_DIR / "agent" / "docs"
-CHROMA_DB_PATH: Path = Path(os.getenv("CHROMA_DB_PATH", str(BASE_DIR / "agent" / "chroma_db")))
+FAISS_INDEX_PATH: str = os.getenv("FAISS_INDEX_PATH", "agent/faiss_index")
 RAG_CHUNK_SIZE: int = 500
 RAG_CHUNK_OVERLAP: int = 50
 RAG_TOP_K: int = 3

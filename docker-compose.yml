@@ -8,7 +8,7 @@ services:
     environment:
       - HF_API_TOKEN=${HF_API_TOKEN}
     volumes:
-      - ./agent/chroma_db:/app/agent/chroma_db
+      - ./agent/faiss_index:/app/agent/faiss_index
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
       interval: 30s

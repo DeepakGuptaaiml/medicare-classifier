@@ -20,4 +20,4 @@ __pycache__/
 !.env.example
 
 # RAG vector store (built at runtime)
-agent/chroma_db/
+agent/faiss_index/

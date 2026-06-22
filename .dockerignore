@@ -8,7 +8,7 @@ __pycache__/
 .env
 .git
 .gitignore
-agent/chroma_db/
+agent/faiss_index/
 *.ipynb
 notebooks/
 tests/

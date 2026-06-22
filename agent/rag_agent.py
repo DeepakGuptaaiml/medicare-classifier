@@ -1,7 +1,7 @@
 """
 Medicare Policy RAG Agent — LangChain RetrievalQA over MMSEA / MCI / MCRC documents.
 
-Flow: load docs → chunk → embed (HF Inference API) → ChromaDB → retrieve top-k → LLM answer.
+Flow: load docs → chunk → embed (HF Inference API) → FAISS → retrieve top-k → LLM answer.
 
 NOTE: In production/enterprise this would use Azure OpenAI Service (same GPT-4o model)
 for HIPAA compliance and to keep PHI within the Azure tenant. Switch by replacing
@@ -10,11 +10,10 @@ HuggingFaceEndpoint with AzureChatOpenAI — all LangChain chain code remains id
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from app.config import (
-    CHROMA_DB_PATH,
+    FAISS_INDEX_PATH,
     get_hf_api_token,
     RAG_CHUNK_OVERLAP,
     RAG_CHUNK_SIZE,
@@ -46,13 +45,11 @@ class MedicareRAGAgent:
 
     def __init__(self) -> None:
         # Lazy imports — keeps FastAPI startup fast and avoids heavy deps until first /ask
-        import chromadb
         from langchain.chains import RetrievalQA
         from langchain.prompts import PromptTemplate
         from langchain.text_splitter import RecursiveCharacterTextSplitter
         from langchain_community.document_loaders import DirectoryLoader, TextLoader
         from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
-        from langchain_community.vectorstores import Chroma
         from langchain_huggingface import HuggingFaceEndpoint
 
         hf_token = get_hf_api_token()
@@ -82,7 +79,7 @@ class MedicareRAGAgent:
             chunk_size=RAG_CHUNK_SIZE,
             chunk_overlap=RAG_CHUNK_OVERLAP,
         )
-        chunks = splitter.split_documents(documents)
+        self.chunks = splitter.split_documents(documents)
 
         # Using HuggingFace Inference API for embeddings — no local model download needed.
         # Keeps Docker image lightweight (<500MB). In production: use Azure OpenAI embeddings.
@@ -91,28 +88,7 @@ class MedicareRAGAgent:
             api_key=hf_token,
         )
 
-        # Lightweight ChromaDB — persistent client (Azure volume at CHROMA_DB_PATH)
-        chroma_path = os.getenv("CHROMA_DB_PATH", str(CHROMA_DB_PATH))
-        CHROMA_DB_PATH.mkdir(parents=True, exist_ok=True)
-        chroma_client = chromadb.PersistentClient(path=chroma_path)
-
-        collection_exists = False
-        if "medicare_policy" in [c.name for c in chroma_client.list_collections()]:
-            collection_exists = chroma_client.get_collection("medicare_policy").count() > 0
-
-        if collection_exists:
-            self._vectorstore = Chroma(
-                client=chroma_client,
-                collection_name="medicare_policy",
-                embedding_function=self._embeddings,
-            )
-        else:
-            self._vectorstore = Chroma.from_documents(
-                documents=chunks,
-                embedding=self._embeddings,
-                client=chroma_client,
-                collection_name="medicare_policy",
-            )
+        self._vectorstore = self._build_or_load_vectorstore(self._embeddings)
 
         # LLM via Hugging Face Inference API (no local model weights)
         self._llm = HuggingFaceEndpoint(
@@ -136,6 +112,28 @@ class MedicareRAGAgent:
             chain_type_kwargs={"prompt": prompt},
         )
         self._default_top_k = RAG_TOP_K
+
+    def _build_or_load_vectorstore(self, embeddings):
+        """
+        Build FAISS index from docs or load existing one.
+        FAISS is lightweight — no onnxruntime dependency.
+        In production: use Azure Cognitive Search for HIPAA compliance.
+        """
+        from langchain_community.vectorstores import FAISS
+
+        faiss_path = Path(FAISS_INDEX_PATH)
+
+        if faiss_path.exists() and (faiss_path / "index.faiss").exists():
+            return FAISS.load_local(
+                str(faiss_path),
+                embeddings,
+                allow_dangerous_deserialization=True,
+            )
+
+        faiss_path.mkdir(parents=True, exist_ok=True)
+        vectorstore = FAISS.from_documents(self.chunks, embeddings)
+        vectorstore.save_local(str(faiss_path))
+        return vectorstore
 
     def get_status(self) -> dict:
         """Return readiness flags without re-initializing the chain."""
