@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import random
 import time
 
@@ -51,16 +52,27 @@ async def get_rag_agent():
         async with rag_agent_lock:
             if rag_agent_instance is None:
                 token = get_hf_api_token()
+                # DEBUG — log token status
+                logging.error(
+                    "DEBUG get_rag_agent: token='%s' len=%d env_keys=%s",
+                    token[:8] + "..." if token else "EMPTY",
+                    len(token),
+                    [k for k in os.environ.keys() if "HF" in k or "TOKEN" in k],
+                )
                 if not token:
+                    logging.error(
+                        "DEBUG get_rag_agent: returning None — "
+                        "HF_API_TOKEN not found in environment"
+                    )
                     return None
                 try:
-                    # Lazy import — only when first /ask request comes in
-                    # This prevents startup crash if RAG deps have issues
                     from agent.rag_agent import MedicareRAGAgent
 
                     rag_agent_instance = MedicareRAGAgent()
                 except Exception as e:
-                    logging.error(f"RAG agent failed to initialize: {e}")
+                    logging.error(
+                        "RAG agent failed to initialize: %s", e, exc_info=True
+                    )
                     return None
     return rag_agent_instance
 
