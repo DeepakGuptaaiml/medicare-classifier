@@ -10,12 +10,12 @@ HuggingFaceEndpoint with AzureChatOpenAI — all LangChain chain code remains id
 
 from __future__ import annotations
 
-import threading
+import os
 from pathlib import Path
 
 from app.config import (
     CHROMA_DB_PATH,
-    HF_API_TOKEN,
+    get_hf_api_token,
     RAG_CHUNK_OVERLAP,
     RAG_CHUNK_SIZE,
     RAG_DOCS_PATH,
@@ -23,10 +23,6 @@ from app.config import (
     RAG_MODEL_ID,
     RAG_TOP_K,
 )
-
-# Singleton instance — lazy-loaded on first /ask request
-_agent_instance: "MedicareRAGAgent | None" = None
-_agent_lock = threading.Lock()
 
 RAG_PROMPT_TEMPLATE = """
 You are a Medicare claims policy expert for MMSEA Section 111
@@ -50,6 +46,7 @@ class MedicareRAGAgent:
 
     def __init__(self) -> None:
         # Lazy imports — keeps FastAPI startup fast and avoids heavy deps until first /ask
+        import chromadb
         from langchain.chains import RetrievalQA
         from langchain.prompts import PromptTemplate
         from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -58,14 +55,13 @@ class MedicareRAGAgent:
         from langchain_community.vectorstores import Chroma
         from langchain_huggingface import HuggingFaceEndpoint
 
-        # Step 1: Validate Hugging Face API token (required for embeddings + LLM)
-        if not HF_API_TOKEN:
+        hf_token = get_hf_api_token()
+        if not hf_token:
             raise RAGConfigurationError(
                 "HF_API_TOKEN not set. Export HF_API_TOKEN with a Hugging Face "
                 "Inference API token. See .env.example."
             )
 
-        # Step 2: Load all policy documents from agent/docs/
         if not RAG_DOCS_PATH.exists():
             raise RAGConfigurationError(f"Policy documents directory not found: {RAG_DOCS_PATH}")
 
@@ -82,48 +78,50 @@ class MedicareRAGAgent:
         documents = loader.load()
         self._documents_loaded = len(documents)
 
-        # Step 3: Split documents into overlapping chunks for retrieval
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=RAG_CHUNK_SIZE,
             chunk_overlap=RAG_CHUNK_OVERLAP,
         )
         chunks = splitter.split_documents(documents)
 
-        # Step 4: Create embeddings via Hugging Face Inference API
-        # In production use Azure OpenAI embeddings for HIPAA compliance
+        # Using HuggingFace Inference API for embeddings — no local model download needed.
+        # Keeps Docker image lightweight (<500MB). In production: use Azure OpenAI embeddings.
         self._embeddings = HuggingFaceInferenceAPIEmbeddings(
             model_name=RAG_EMBEDDING_MODEL,
-            api_key=HF_API_TOKEN,
+            api_key=hf_token,
         )
 
-        # Step 5: Persist vectors in ChromaDB (reuses existing index if present)
+        # Lightweight ChromaDB — persistent client (Azure volume at CHROMA_DB_PATH)
+        chroma_path = os.getenv("CHROMA_DB_PATH", str(CHROMA_DB_PATH))
         CHROMA_DB_PATH.mkdir(parents=True, exist_ok=True)
-        chroma_has_data = any(CHROMA_DB_PATH.iterdir())
+        chroma_client = chromadb.PersistentClient(path=chroma_path)
 
-        if chroma_has_data:
+        collection_exists = False
+        if "medicare_policy" in [c.name for c in chroma_client.list_collections()]:
+            collection_exists = chroma_client.get_collection("medicare_policy").count() > 0
+
+        if collection_exists:
             self._vectorstore = Chroma(
+                client=chroma_client,
                 collection_name="medicare_policy",
                 embedding_function=self._embeddings,
-                persist_directory=str(CHROMA_DB_PATH),
             )
         else:
             self._vectorstore = Chroma.from_documents(
                 documents=chunks,
                 embedding=self._embeddings,
+                client=chroma_client,
                 collection_name="medicare_policy",
-                persist_directory=str(CHROMA_DB_PATH),
             )
 
-        # Step 6: Initialize LLM via Hugging Face Inference Endpoint
-        # In production use Azure OpenAI Service (AzureChatOpenAI) for HIPAA compliance
+        # LLM via Hugging Face Inference API (no local model weights)
         self._llm = HuggingFaceEndpoint(
             repo_id=RAG_MODEL_ID,
-            huggingfacehub_api_token=HF_API_TOKEN,
+            huggingfacehub_api_token=hf_token,
             temperature=0.1,
             max_new_tokens=512,
         )
 
-        # Step 7: Build RetrievalQA chain — "stuff" packs retrieved chunks into prompt
         prompt = PromptTemplate(
             template=RAG_PROMPT_TEMPLATE,
             input_variables=["context", "question"],
@@ -148,11 +146,7 @@ class MedicareRAGAgent:
         }
 
     def ask(self, question: str, max_chunks: int | None = None) -> dict:
-        """
-        Answer a policy question using retrieved context + LLM generation.
-
-        Returns dict with question, answer, sources, and chunks_used.
-        """
+        """Answer a policy question using retrieved context + LLM generation."""
         question = (question or "").strip()
         if not question:
             return {
@@ -197,20 +191,3 @@ class MedicareRAGAgent:
                 "sources": [],
                 "chunks_used": [],
             }
-
-
-def get_rag_agent() -> MedicareRAGAgent:
-    """Lazy singleton — initialize RAG pipeline once, reuse across requests."""
-    global _agent_instance
-    if _agent_instance is None:
-        with _agent_lock:
-            if _agent_instance is None:
-                _agent_instance = MedicareRAGAgent()
-    return _agent_instance
-
-
-def reset_rag_agent() -> None:
-    """Reset singleton (used in tests)."""
-    global _agent_instance
-    with _agent_lock:
-        _agent_instance = None

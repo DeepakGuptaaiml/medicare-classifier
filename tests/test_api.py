@@ -70,11 +70,10 @@ def mock_rag_agent(monkeypatch):
 
     fake.ask.side_effect = _ask
     monkeypatch.setenv("HF_API_TOKEN", "test-token-for-ci")
-    monkeypatch.setattr(main_module, "HF_API_TOKEN", "test-token-for-ci")
-    monkeypatch.setattr(main_module, "get_rag_agent", lambda: fake)
-    main_module._rag_agent = None
+    monkeypatch.setattr(main_module, "get_hf_api_token", lambda: "test-token-for-ci")
+    main_module.rag_agent_instance = fake
     yield fake
-    main_module._rag_agent = None
+    main_module.rag_agent_instance = None
 
 
 def test_health(client):
@@ -124,16 +123,16 @@ def test_rag_status_endpoint(client):
     response = client.get("/rag/status")
     assert response.status_code == 200
     body = response.json()
-    assert body["documents_loaded"] == 3
     assert "status" in body
+    assert "hf_token_configured" in body
 
 
 def test_rag_status_endpoint_loaded(mock_rag_agent, client):
-    main_module._rag_agent = mock_rag_agent
     response = client.get("/rag/status")
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] in ("ok", "ready_to_load")
+    assert body["status"] in ("ready", "ready_to_load")
+    assert body["hf_token_configured"] is True
 
 
 def test_ask_valid_question(mock_rag_agent, client):
@@ -184,8 +183,8 @@ def test_ask_out_of_scope(mock_rag_agent, client):
 
 def test_ask_without_hf_token(monkeypatch, client):
     monkeypatch.delenv("HF_API_TOKEN", raising=False)
-    monkeypatch.setattr(main_module, "HF_API_TOKEN", "")
-    main_module._rag_agent = None
+    monkeypatch.setattr(main_module, "get_hf_api_token", lambda: "")
+    main_module.rag_agent_instance = None
     response = client.post(
         "/ask",
         json={"question": "What is MMSEA Section 111?"},

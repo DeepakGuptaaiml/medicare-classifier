@@ -65,3 +65,5 @@ class RAGStatusResponse(BaseModel):
     documents_loaded: int
     vector_store_ready: bool
     llm_ready: bool
+    hf_token_configured: bool = False
+    hf_token_length: int = 0  # diagnostic only — never expose token value

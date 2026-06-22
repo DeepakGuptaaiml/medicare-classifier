@@ -76,10 +76,13 @@ jobs:
           fi
 
       - name: Configure HF API token on API Container App
-        if: ${{ secrets.HF_API_TOKEN != '' }}
         env:
           HF_API_TOKEN: ${{ secrets.HF_API_TOKEN }}
         run: |
+          if [ -z "$HF_API_TOKEN" ]; then
+            echo "HF_API_TOKEN secret not set in GitHub — skip (RAG /ask will return unavailable)"
+            exit 0
+          fi
           az containerapp secret set \
             --name "${{ env.API_APP_NAME }}" \
             --resource-group "${{ env.RESOURCE_GROUP }}" \
@@ -90,12 +93,19 @@ jobs:
             --set-env-vars HF_API_TOKEN=secretref:hf-api-token
 
       - name: Deploy API Container App
+        env:
+          HF_API_TOKEN: ${{ secrets.HF_API_TOKEN }}
         run: |
-          az containerapp update \
-            --name "${{ env.API_APP_NAME }}" \
+          UPDATE_ARGS=(--name "${{ env.API_APP_NAME }}" \
             --resource-group "${{ env.RESOURCE_GROUP }}" \
             --image "$API_IMAGE" \
-            --revision-suffix "$REVISION_SUFFIX"
+            --revision-suffix "$REVISION_SUFFIX")
+          if [ -n "$HF_API_TOKEN" ]; then
+            az containerapp update "${UPDATE_ARGS[@]}" \
+              --set-env-vars HF_API_TOKEN=secretref:hf-api-token
+          else
+            az containerapp update "${UPDATE_ARGS[@]}"
+          fi
 
       - name: Deploy Streamlit Container App
         run: |
