@@ -8,9 +8,7 @@ import joblib
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 
-from agent.rag_agent import MedicareRAGAgent
-from app.config import get_hf_api_token, RAG_DOCS_PATH, RAG_MODEL_ID
-from app.config import MODEL_PATH, SAMPLE_CLAIMS_PATH
+from app.config import get_hf_api_token, MODEL_PATH, SAMPLE_CLAIMS_PATH
 from app.preprocess import load_preprocess_config, predict_medicare
 from app.schemas import (
     AskRequest,
@@ -25,7 +23,7 @@ from app.schemas import (
 artifact: dict = {}
 
 # Global singleton — None until first /ask request
-rag_agent_instance: MedicareRAGAgent | None = None
+rag_agent_instance = None  # MedicareRAGAgent, loaded lazily
 rag_agent_lock = asyncio.Lock()
 
 LABEL_MAP = {0: "Not Reportable", 1: "Medicare Reportable"}
@@ -43,7 +41,7 @@ def _load_sample_claims() -> list[dict]:
         return json.load(f)
 
 
-async def get_rag_agent() -> MedicareRAGAgent | None:
+async def get_rag_agent():
     """
     Lazy singleton — loads RAG agent on first call only.
     Thread-safe via asyncio lock.
@@ -55,7 +53,15 @@ async def get_rag_agent() -> MedicareRAGAgent | None:
                 token = get_hf_api_token()
                 if not token:
                     return None
-                rag_agent_instance = MedicareRAGAgent()
+                try:
+                    # Lazy import — only when first /ask request comes in
+                    # This prevents startup crash if RAG deps have issues
+                    from agent.rag_agent import MedicareRAGAgent
+
+                    rag_agent_instance = MedicareRAGAgent()
+                except Exception as e:
+                    logging.error(f"RAG agent failed to initialize: {e}")
+                    return None
     return rag_agent_instance
 
 
@@ -147,6 +153,8 @@ def predict(claim: ClaimFeatures):
 
 
 def _count_policy_documents() -> int:
+    from app.config import RAG_DOCS_PATH
+
     if not RAG_DOCS_PATH.exists():
         return 0
     return len(list(RAG_DOCS_PATH.glob("*.txt")))
@@ -195,6 +203,8 @@ async def ask_policy_question(request: AskRequest):
     start_time = time.time()
     result = agent.ask(request.question, max_chunks=request.max_chunks)
     processing_time = (time.time() - start_time) * 1000
+
+    from app.config import RAG_MODEL_ID
 
     return AskResponse(
         question=result["question"],
