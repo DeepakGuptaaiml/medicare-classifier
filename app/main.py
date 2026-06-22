@@ -109,7 +109,11 @@ def _get_artifact() -> dict:
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "Medicare Classifier API"}
+    return {
+        "status": "ok",
+        "service": "Medicare Classifier API",
+        "version": "1.0.1",
+    }
 
 
 @app.get("/health", response_model=HealthResponse)
