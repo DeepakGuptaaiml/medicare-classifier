@@ -1,11 +1,10 @@
 """
 Medicare Policy RAG Agent — LangChain RetrievalQA over MMSEA / MCI / MCRC documents.
 
-Flow: load docs → chunk → embed (HF Inference API) → FAISS → retrieve top-k → LLM answer.
+Flow: load docs → chunk → TF-IDF retrieve (local, no API) → LLM answer (optional HF).
 
-NOTE: In production/enterprise this would use Azure OpenAI Service (same GPT-4o model)
-for HIPAA compliance and to keep PHI within the Azure tenant. Switch by replacing
-HuggingFaceEndpoint with AzureChatOpenAI — all LangChain chain code remains identical.
+NOTE: In production/enterprise this would use Azure OpenAI Service for HIPAA compliance.
+TF-IDF retrieval works offline; LLM requires outbound access at query time only.
 """
 
 from __future__ import annotations
@@ -13,12 +12,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.config import (
-    FAISS_INDEX_PATH,
     get_hf_api_token,
     RAG_CHUNK_OVERLAP,
     RAG_CHUNK_SIZE,
     RAG_DOCS_PATH,
-    RAG_EMBEDDING_MODEL,
     RAG_MODEL_ID,
     RAG_TOP_K,
 )
@@ -44,12 +41,11 @@ class MedicareRAGAgent:
     """RAG agent over Medicare policy reference documents."""
 
     def __init__(self) -> None:
-        # Lazy imports — keeps FastAPI startup fast and avoids heavy deps until first /ask
         from langchain.chains import RetrievalQA
         from langchain.prompts import PromptTemplate
         from langchain.text_splitter import RecursiveCharacterTextSplitter
         from langchain_community.document_loaders import DirectoryLoader, TextLoader
-        from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
+        from langchain_community.retrievers import TFIDFRetriever
         from langchain_huggingface import HuggingFaceEndpoint
 
         hf_token = get_hf_api_token()
@@ -81,16 +77,11 @@ class MedicareRAGAgent:
         )
         self.chunks = splitter.split_documents(documents)
 
-        # Using HuggingFace Inference API for embeddings — no local model download needed.
-        # Keeps Docker image lightweight (<500MB). In production: use Azure OpenAI embeddings.
-        self._embeddings = HuggingFaceInferenceAPIEmbeddings(
-            model_name=RAG_EMBEDDING_MODEL,
-            api_key=hf_token,
-        )
+        # TF-IDF retrieval — fully local, no embeddings API or outbound calls at startup
+        self.retriever = TFIDFRetriever.from_documents(self.chunks, k=RAG_TOP_K)
+        self._default_top_k = RAG_TOP_K
 
-        self._vectorstore = self._build_or_load_vectorstore(self._embeddings)
-
-        # LLM via Hugging Face Inference API (no local model weights)
+        # LLM via Hugging Face Inference API (outbound only at query time)
         self._llm = HuggingFaceEndpoint(
             repo_id=RAG_MODEL_ID,
             huggingfacehub_api_token=hf_token,
@@ -102,49 +93,25 @@ class MedicareRAGAgent:
             template=RAG_PROMPT_TEMPLATE,
             input_variables=["context", "question"],
         )
-        retriever = self._vectorstore.as_retriever(search_kwargs={"k": RAG_TOP_K})
 
-        self._qa_chain = RetrievalQA.from_chain_type(
+        self.chain = RetrievalQA.from_chain_type(
             llm=self._llm,
             chain_type="stuff",
-            retriever=retriever,
+            retriever=self.retriever,
             return_source_documents=True,
             chain_type_kwargs={"prompt": prompt},
         )
-        self._default_top_k = RAG_TOP_K
-
-    def _build_or_load_vectorstore(self, embeddings):
-        """
-        Build FAISS index from docs or load existing one.
-        FAISS is lightweight — no onnxruntime dependency.
-        In production: use Azure Cognitive Search for HIPAA compliance.
-        """
-        from langchain_community.vectorstores import FAISS
-
-        faiss_path = Path(FAISS_INDEX_PATH)
-
-        if faiss_path.exists() and (faiss_path / "index.faiss").exists():
-            return FAISS.load_local(
-                str(faiss_path),
-                embeddings,
-                allow_dangerous_deserialization=True,
-            )
-
-        faiss_path.mkdir(parents=True, exist_ok=True)
-        vectorstore = FAISS.from_documents(self.chunks, embeddings)
-        vectorstore.save_local(str(faiss_path))
-        return vectorstore
 
     def get_status(self) -> dict:
         """Return readiness flags without re-initializing the chain."""
         return {
             "documents_loaded": self._documents_loaded,
-            "vector_store_ready": self._vectorstore is not None,
+            "vector_store_ready": self.retriever is not None,
             "llm_ready": self._llm is not None,
         }
 
     def ask(self, question: str, max_chunks: int | None = None) -> dict:
-        """Answer a policy question using retrieved context + LLM generation."""
+        """Answer a policy question using TF-IDF retrieval + optional LLM generation."""
         question = (question or "").strip()
         if not question:
             return {
@@ -155,37 +122,26 @@ class MedicareRAGAgent:
             }
 
         top_k = max_chunks or self._default_top_k
+        self.retriever.k = top_k
+
+        docs = self.retriever.get_relevant_documents(question)
+        context = "\n\n".join([d.page_content for d in docs])
+        sources = list(
+            {
+                Path(d.metadata.get("source", "policy_docs")).name
+                for d in docs
+            }
+        )
 
         try:
-            self._qa_chain.retriever.search_kwargs["k"] = top_k
-            result = self._qa_chain.invoke({"query": question})
-            answer = result.get("result", "").strip()
-            source_docs = result.get("source_documents", [])
+            result = self.chain.invoke({"query": question})
+            answer = result.get("result", context)
+        except Exception:
+            answer = f"Based on policy documents:\n\n{context}"
 
-            sources: list[str] = []
-            chunks_used: list[str] = []
-            for doc in source_docs:
-                source_name = Path(doc.metadata.get("source", "unknown")).name
-                if source_name not in sources:
-                    sources.append(source_name)
-                chunk_text = doc.page_content.strip()
-                if chunk_text and chunk_text not in chunks_used:
-                    chunks_used.append(chunk_text)
-
-            return {
-                "question": question,
-                "answer": answer or "I cannot find this in the policy documents.",
-                "sources": sources,
-                "chunks_used": chunks_used,
-            }
-
-        except Exception as exc:
-            return {
-                "question": question,
-                "answer": (
-                    f"The policy Q&A service is temporarily unavailable: {exc}. "
-                    "Please verify HF_API_TOKEN and Hugging Face Inference API status."
-                ),
-                "sources": [],
-                "chunks_used": [],
-            }
+        return {
+            "question": question,
+            "answer": answer,
+            "sources": sources,
+            "chunks_used": [d.page_content[:200] for d in docs],
+        }
