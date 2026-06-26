@@ -27,6 +27,11 @@ jobs:
       contents: read
       packages: read
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
       - name: Log in to Azure
         uses: azure/login@v2
         with:
@@ -115,6 +120,17 @@ jobs:
             --image "$UI_IMAGE" \
             --revision-suffix "$REVISION_SUFFIX"
 
+      - name: Install Azure ML SDK
+        run: pip install -r requirements-register.txt
+
+      - name: Register model in Azure ML
+        run: |
+          python scripts/register_model.py \
+            --model medicare \
+            --commit-sha ${{ github.event.workflow_run.head_sha }}
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+
       - name: Verify API health
         run: |
           FQDN=$(az containerapp show \
@@ -145,3 +161,4 @@ jobs:
           echo "- **UI image:** \`$UI_IMAGE\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **API URL:** https://${API_FQDN}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **UI URL:** https://${UI_FQDN}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Azure ML model:** \`medicare-classifier\` registered" >> "$GITHUB_STEP_SUMMARY"
