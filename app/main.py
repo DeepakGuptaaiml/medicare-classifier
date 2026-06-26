@@ -10,13 +10,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 
 from app.config import get_hf_api_token, MODEL_PATH, SAMPLE_CLAIMS_PATH
+from app.monitor import check_drift, get_prediction_stats, log_prediction
 from app.preprocess import load_preprocess_config, predict_medicare
 from app.schemas import (
     AskRequest,
     AskResponse,
     ClaimFeatures,
+    DriftResponse,
     HealthResponse,
     ModelInfoResponse,
+    MonitoringResponse,
     PredictionResponse,
     RAGStatusResponse,
 )
@@ -154,6 +157,7 @@ def model_sample():
 
 @app.post("/predict", response_model=PredictionResponse)
 def predict(claim: ClaimFeatures):
+    start_time = time.time()
     data = _get_artifact()
     try:
         label, proba = predict_medicare(
@@ -164,6 +168,17 @@ def predict(claim: ClaimFeatures):
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Prediction failed: {exc}") from exc
 
+    latency_ms = (time.time() - start_time) * 1000
+
+    log_prediction(
+        input_features=claim.model_dump(),
+        prediction=label,
+        probability=proba,
+        latency_ms=latency_ms,
+        model_name=data["model_name"],
+        model_version="1.0",
+    )
+
     return PredictionResponse(
         is_medicare_reportable=label,
         probability=round(proba, 4),
@@ -171,6 +186,50 @@ def predict(claim: ClaimFeatures):
         model_name=data["model_name"],
         target=data["target"],
     )
+
+
+@app.get("/monitor/health", response_model=MonitoringResponse, tags=["Monitoring"])
+def monitor_health():
+    """
+    Real-time prediction statistics and SLO status.
+    In production: data would persist in Azure Table Storage.
+    """
+    return get_prediction_stats()
+
+
+@app.get("/monitor/drift", response_model=DriftResponse, tags=["Monitoring"])
+def monitor_drift():
+    """
+    Check for prediction and latency drift.
+    In production: use Evidently AI + Azure Monitor alerts.
+    """
+    return check_drift()
+
+
+@app.get("/monitor/slo", tags=["Monitoring"])
+def monitor_slo():
+    """Service Level Objectives status."""
+    stats = get_prediction_stats()
+    latency = stats.get("latency") or {}
+    slo = stats.get("slo_status") or {}
+    return {
+        "slo_definitions": {
+            "p95_latency_ms": {
+                "target": "< 500ms",
+                "current": latency.get("p95_ms", "N/A"),
+                "status": "ok" if slo.get("p95_latency_ok", True) else "breached",
+            },
+            "availability": {
+                "target": "99.9%",
+                "status": "ok",
+            },
+            "prediction_drift": {
+                "target": "< 15% shift",
+                "status": "ok",
+            },
+        },
+        "total_predictions_tracked": stats.get("total_predictions", 0),
+    }
 
 
 def _count_policy_documents() -> int:

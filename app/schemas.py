@@ -1,3 +1,5 @@
+from typing import Any, Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -67,3 +69,50 @@ class RAGStatusResponse(BaseModel):
     llm_ready: bool
     hf_token_configured: bool = False
     hf_token_length: int = 0  # diagnostic only — never expose token value
+
+
+class PredictionLogEntry(BaseModel):
+    timestamp: str
+    model_name: str
+    model_version: str
+    prediction: Any
+    probability: Optional[float]
+    latency_ms: float
+
+
+class LatencyStats(BaseModel):
+    p50_ms: float
+    p95_ms: float
+    p99_ms: float
+    mean_ms: float
+
+
+class SLOStatus(BaseModel):
+    p95_latency_ok: bool
+    p95_latency_ms: float
+    slo_threshold_ms: float
+
+
+class MonitoringResponse(BaseModel):
+    total_predictions: int
+    first_prediction: Optional[str] = None
+    last_prediction: Optional[str] = None
+    latency: Optional[LatencyStats] = None
+    prediction_distribution: Optional[dict] = None
+    slo_status: Optional[SLOStatus] = None
+    message: Optional[str] = None
+
+
+class DriftAlert(BaseModel):
+    type: str
+    severity: str
+    message: str
+
+
+class DriftResponse(BaseModel):
+    drift_detected: bool
+    status: str
+    alerts: list[DriftAlert] = []
+    predictions_analyzed: int
+    recommendation: str
+    message: Optional[str] = None
