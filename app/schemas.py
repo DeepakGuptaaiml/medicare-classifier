@@ -69,6 +69,8 @@ class RAGStatusResponse(BaseModel):
     llm_ready: bool
     hf_token_configured: bool = False
     hf_token_length: int = 0  # diagnostic only — never expose token value
+    azure_search_configured: bool = False
+    retrieval_backend: str = "unknown"
 
 
 class PredictionLogEntry(BaseModel):

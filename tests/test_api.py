@@ -183,11 +183,44 @@ def test_ask_out_of_scope(mock_rag_agent, client):
 
 def test_ask_without_hf_token(monkeypatch, client):
     monkeypatch.delenv("HF_API_TOKEN", raising=False)
+    monkeypatch.delenv("AZURE_SEARCH_ENDPOINT", raising=False)
+    monkeypatch.delenv("AZURE_SEARCH_KEY", raising=False)
     monkeypatch.setattr(main_module, "get_hf_api_token", lambda: "")
+    monkeypatch.setattr(main_module, "azure_search_configured", lambda: False)
     main_module.rag_agent_instance = None
     response = client.post(
         "/ask",
         json={"question": "What is MMSEA Section 111?"},
     )
     assert response.status_code == 503
-    assert "HF_API_TOKEN" in response.json()["detail"]
+    assert "AZURE_SEARCH" in response.json()["detail"] or "HF_API_TOKEN" in response.json()["detail"]
+
+
+def test_ask_with_azure_search_only(monkeypatch, client):
+    """RAG works with Azure Search even when HF token is absent."""
+    fake = MagicMock()
+    fake.get_status.return_value = {
+        "documents_loaded": 0,
+        "vector_store_ready": True,
+        "llm_ready": False,
+        "retrieval_backend": "azure_search",
+    }
+    fake.ask.return_value = {
+        "question": "What are the ORM threshold rules?",
+        "answer": "Based on policy documents:\n\nORM threshold: paid_3 > $750.00",
+        "sources": ["mci_reference.txt"],
+        "chunks_used": ["ORM threshold: paid_3 > $750.00"],
+    }
+
+    monkeypatch.delenv("HF_API_TOKEN", raising=False)
+    monkeypatch.setattr(main_module, "get_hf_api_token", lambda: "")
+    monkeypatch.setattr(main_module, "azure_search_configured", lambda: True)
+    main_module.rag_agent_instance = fake
+
+    response = client.post(
+        "/ask",
+        json={"question": "What are the ORM threshold rules?"},
+    )
+    assert response.status_code == 200
+    assert response.json()["model_used"] == "retrieval-only"
+    main_module.rag_agent_instance = None

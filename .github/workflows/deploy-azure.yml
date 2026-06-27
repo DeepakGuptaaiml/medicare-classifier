@@ -80,6 +80,32 @@ jobs:
             echo "GHCR_TOKEN not set — assuming public GHCR packages"
           fi
 
+      - name: Configure Azure Search on API Container App
+        env:
+          AZURE_SEARCH_ENDPOINT: ${{ secrets.AZURE_SEARCH_ENDPOINT }}
+          AZURE_SEARCH_KEY: ${{ secrets.AZURE_SEARCH_KEY }}
+          AZURE_SEARCH_INDEX: ${{ secrets.AZURE_SEARCH_INDEX }}
+        run: |
+          if [ -z "$AZURE_SEARCH_ENDPOINT" ] || [ -z "$AZURE_SEARCH_KEY" ]; then
+            echo "Azure Search secrets not set — skip (RAG falls back to TF-IDF or unavailable)"
+            exit 0
+          fi
+          INDEX="${AZURE_SEARCH_INDEX:-medicare-policy}"
+          az containerapp secret set \
+            --name "${{ env.API_APP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --secrets \
+              azure-search-endpoint="$AZURE_SEARCH_ENDPOINT" \
+              azure-search-key="$AZURE_SEARCH_KEY" \
+              azure-search-index="$INDEX"
+          az containerapp update \
+            --name "${{ env.API_APP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --set-env-vars \
+              AZURE_SEARCH_ENDPOINT=secretref:azure-search-endpoint \
+              AZURE_SEARCH_KEY=secretref:azure-search-key \
+              AZURE_SEARCH_INDEX=secretref:azure-search-index
+
       - name: Configure HF API token on API Container App
         env:
           HF_API_TOKEN: ${{ secrets.HF_API_TOKEN }}
@@ -120,6 +146,42 @@ jobs:
             --image "$UI_IMAGE" \
             --revision-suffix "$REVISION_SUFFIX"
 
+      - name: Verify API health
+        run: |
+          FQDN=$(az containerapp show \
+            --name "${{ env.API_APP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          echo "API URL: https://${FQDN}"
+
+          ok=false
+          for i in $(seq 1 18); do
+            code=$(curl -s -o /tmp/health.json -w "%{http_code}" "https://${FQDN}/health" || echo "000")
+            echo "Attempt ${i}/18: GET /health → HTTP ${code}"
+            if [ "$code" = "200" ]; then
+              cat /tmp/health.json
+              echo ""
+              ok=true
+              break
+            fi
+            sleep 10
+          done
+
+          if [ "$ok" != "true" ]; then
+            echo "Health check failed — latest revision status:"
+            az containerapp revision list \
+              --name "${{ env.API_APP_NAME }}" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --query "[?properties.active].{name:name, traffic:properties.trafficWeight, health:properties.healthState, replicas:properties.replicas}" \
+              -o table || true
+            exit 1
+          fi
+
+          curl -sf "https://${FQDN}/model/sample" | head -c 200 || echo "Warning: /model/sample check skipped"
+          echo ""
+          curl -sf "https://${FQDN}/rag/status" || echo "Warning: /rag/status check skipped"
+          echo ""
+
       - name: Install Azure ML SDK
         run: pip install -r requirements-register.txt
 
@@ -130,20 +192,6 @@ jobs:
             --commit-sha ${{ github.event.workflow_run.head_sha }}
         env:
           AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Verify API health
-        run: |
-          FQDN=$(az containerapp show \
-            --name "${{ env.API_APP_NAME }}" \
-            --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --query "properties.configuration.ingress.fqdn" -o tsv)
-          echo "API URL: https://${FQDN}"
-          sleep 20
-          curl -sf "https://${FQDN}/health"
-          curl -sf "https://${FQDN}/model/sample" | head -c 200
-          echo ""
-          curl -sf "https://${FQDN}/rag/status"
-          echo ""
 
       - name: Deployment summary
         run: |

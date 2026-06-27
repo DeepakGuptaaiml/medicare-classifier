@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import warnings
 from pathlib import Path
 
@@ -312,6 +314,27 @@ def main() -> None:
     )
     comparison_df.to_csv(MODELS_DIR / "model_comparison.csv", index=False)
     print(f"\nSaved {MODELS_DIR / 'medicare_classifier.pkl'}")
+    _publish_artifacts(MODELS_DIR)
+
+
+def _publish_artifacts(models_dir: Path) -> None:
+    """
+    Copy trained artifacts to an AML job output folder when configured.
+
+    Set output named ``model_output`` on the command job — AML exposes
+    ``AZUREML_OUTPUT_MODEL_OUTPUT``. Or set MODEL_OUTPUT_DIR manually.
+    """
+    output_dir = os.getenv("MODEL_OUTPUT_DIR") or os.getenv("AZUREML_OUTPUT_MODEL_OUTPUT")
+    if not output_dir:
+        return
+
+    dest = Path(output_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in ("medicare_classifier.pkl", "preprocess_config.json", "model_comparison.csv"):
+        src = models_dir / name
+        if src.exists():
+            shutil.copy2(src, dest / name)
+            print(f"Published {dest / name}")
 
 
 if __name__ == "__main__":

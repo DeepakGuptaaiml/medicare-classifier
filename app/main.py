@@ -9,7 +9,12 @@ import joblib
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 
-from app.config import get_hf_api_token, MODEL_PATH, SAMPLE_CLAIMS_PATH
+from app.config import (
+    azure_search_configured,
+    get_hf_api_token,
+    MODEL_PATH,
+    SAMPLE_CLAIMS_PATH,
+)
 from app.monitor import check_drift, get_prediction_stats, log_prediction
 from app.preprocess import load_preprocess_config, predict_medicare
 from app.schemas import (
@@ -33,8 +38,8 @@ rag_agent_lock = asyncio.Lock()
 LABEL_MAP = {0: "Not Reportable", 1: "Medicare Reportable"}
 
 RAG_UNAVAILABLE_MSG = (
-    "RAG agent unavailable: HF_API_TOKEN not configured. "
-    "Set HF_API_TOKEN environment variable to enable."
+    "RAG agent unavailable: configure AZURE_SEARCH_ENDPOINT + AZURE_SEARCH_KEY "
+    "or HF_API_TOKEN to enable."
 )
 
 
@@ -54,19 +59,7 @@ async def get_rag_agent():
     if rag_agent_instance is None:
         async with rag_agent_lock:
             if rag_agent_instance is None:
-                token = get_hf_api_token()
-                # DEBUG — log token status
-                logging.error(
-                    "DEBUG get_rag_agent: token='%s' len=%d env_keys=%s",
-                    token[:8] + "..." if token else "EMPTY",
-                    len(token),
-                    [k for k in os.environ.keys() if "HF" in k or "TOKEN" in k],
-                )
-                if not token:
-                    logging.error(
-                        "DEBUG get_rag_agent: returning None — "
-                        "HF_API_TOKEN not found in environment"
-                    )
+                if not azure_search_configured() and not get_hf_api_token():
                     return None
                 try:
                     from agent.rag_agent import MedicareRAGAgent
@@ -87,8 +80,11 @@ async def lifespan(app: FastAPI):
     artifact["data"] = joblib.load(MODEL_PATH)
     artifact["config"] = load_preprocess_config()
     token_ok = bool(get_hf_api_token())
+    search_ok = azure_search_configured()
     logging.getLogger("uvicorn.error").info(
-        "Medicare Classifier API ready | model=Adaboost | RAG HF_API_TOKEN configured=%s",
+        "Medicare Classifier API ready | model=Adaboost | "
+        "RAG azure_search=%s | RAG HF_API_TOKEN=%s",
+        search_ok,
         token_ok,
     )
     yield
@@ -245,10 +241,18 @@ async def rag_status():
     """Check if RAG agent is loaded and ready."""
     token = get_hf_api_token()
     token_configured = bool(token and len(token) > 10)
+    search_configured = azure_search_configured()
     agent_ready = rag_agent_instance is not None
-    doc_count = _count_policy_documents() if token_configured else 0
+    doc_count = _count_policy_documents() if not search_configured else 0
+    backend = "unknown"
+    if agent_ready:
+        backend = rag_agent_instance.get_status().get("retrieval_backend", "unknown")
+    elif search_configured:
+        backend = "azure_search"
+    elif token_configured:
+        backend = "tfidf"
 
-    if not token_configured:
+    if not search_configured and not token_configured:
         status = "unavailable"
     elif agent_ready:
         status = "ready"
@@ -258,10 +262,14 @@ async def rag_status():
     return RAGStatusResponse(
         status=status,
         documents_loaded=doc_count,
-        vector_store_ready=agent_ready,
-        llm_ready=agent_ready,
+        vector_store_ready=search_configured or agent_ready,
+        llm_ready=agent_ready and rag_agent_instance.get_status().get("llm_ready", False)
+        if agent_ready
+        else token_configured,
         hf_token_configured=token_configured,
         hf_token_length=len(token) if token else 0,
+        azure_search_configured=search_configured,
+        retrieval_backend=backend,
     )
 
 
@@ -286,11 +294,13 @@ async def ask_policy_question(request: AskRequest):
 
     from app.config import RAG_MODEL_ID
 
+    model_used = RAG_MODEL_ID if agent.get_status().get("llm_ready") else "retrieval-only"
+
     return AskResponse(
         question=result["question"],
         answer=result["answer"],
         sources=result["sources"],
         chunks_used=result["chunks_used"],
-        model_used=RAG_MODEL_ID,
+        model_used=model_used,
         processing_time_ms=round(processing_time, 2),
     )

@@ -28,3 +28,17 @@ RAG_CHUNK_OVERLAP: int = 50
 RAG_TOP_K: int = 3
 RAG_MODEL_ID: str = "HuggingFaceH4/zephyr-7b-beta"
 RAG_EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
+
+
+def get_azure_search_config() -> dict[str, str] | None:
+    """Return Azure Search settings when endpoint and key are configured."""
+    endpoint = os.environ.get("AZURE_SEARCH_ENDPOINT", "").strip().rstrip("/")
+    key = os.environ.get("AZURE_SEARCH_KEY", "").strip()
+    index = os.environ.get("AZURE_SEARCH_INDEX", "medicare-policy").strip()
+    if endpoint and key:
+        return {"endpoint": endpoint, "key": key, "index": index}
+    return None
+
+
+def azure_search_configured() -> bool:
+    return get_azure_search_config() is not None
