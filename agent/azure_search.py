@@ -41,8 +41,7 @@ class AzureSearchRetriever(BaseRetriever):
     client: AzureSearchClient = Field(exclude=True)
     k: int = 3
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = {"arbitrary_types_allowed": True}
 
     def _get_relevant_documents(self, query: str) -> list[Document]:
         hits = self.client.search(query, top_k=self.k)

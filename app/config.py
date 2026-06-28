@@ -35,6 +35,8 @@ def get_azure_search_config() -> dict[str, str] | None:
     endpoint = os.environ.get("AZURE_SEARCH_ENDPOINT", "").strip().rstrip("/")
     key = os.environ.get("AZURE_SEARCH_KEY", "").strip()
     index = os.environ.get("AZURE_SEARCH_INDEX", "medicare-policy").strip()
+    if endpoint and not endpoint.startswith(("http://", "https://")):
+        endpoint = f"https://{endpoint}"
     if endpoint and key:
         return {"endpoint": endpoint, "key": key, "index": index}
     return None

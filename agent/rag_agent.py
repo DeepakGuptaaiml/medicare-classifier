@@ -129,6 +129,14 @@ class MedicareRAGAgent:
             "retrieval_backend": self.retrieval_backend,
         }
 
+    def _retrieve_documents(self, question: str, top_k: int):
+        """Retrieve policy chunks — compatible with LangChain invoke API."""
+        if hasattr(self.retriever, "k"):
+            self.retriever.k = top_k
+        if hasattr(self.retriever, "invoke"):
+            return self.retriever.invoke(question)
+        return self.retriever.get_relevant_documents(question)
+
     def ask(self, question: str, max_chunks: int | None = None) -> dict:
         """Answer a policy question using retrieval + optional LLM generation."""
         question = (question or "").strip()
@@ -141,10 +149,7 @@ class MedicareRAGAgent:
             }
 
         top_k = max_chunks or self._default_top_k
-        if hasattr(self.retriever, "k"):
-            self.retriever.k = top_k
-
-        docs = self.retriever.get_relevant_documents(question)
+        docs = self._retrieve_documents(question, top_k)
         context = "\n\n".join([d.page_content for d in docs])
         sources = list(
             {Path(d.metadata.get("source", "policy_docs")).name for d in docs}

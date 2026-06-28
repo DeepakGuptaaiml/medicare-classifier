@@ -289,7 +289,14 @@ async def ask_policy_question(request: AskRequest):
         raise HTTPException(status_code=503, detail=RAG_UNAVAILABLE_MSG)
 
     start_time = time.time()
-    result = agent.ask(request.question, max_chunks=request.max_chunks)
+    try:
+        result = agent.ask(request.question, max_chunks=request.max_chunks)
+    except Exception as exc:
+        logging.error("RAG /ask failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Policy Q&A failed during retrieval: {exc}",
+        ) from exc
     processing_time = (time.time() - start_time) * 1000
 
     from app.config import RAG_MODEL_ID
