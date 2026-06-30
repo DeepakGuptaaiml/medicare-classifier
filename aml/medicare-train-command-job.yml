@@ -1,0 +1,29 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+type: command
+
+# Matches successful Studio job "First" (2026-06-29 Completed)
+# Submit: az ml job create -f aml/medicare-train-command-job.yml -g rg-claims-intelligence -w claims-ml-workspace
+
+display_name: medicare-classifier-train
+experiment_name: Default
+description: Train Medicare classifier from claims_medicare_training datastore
+
+code: .
+command: >-
+  python train_medicare_classifier.py
+  --data_path ${{inputs.training_data}}
+  --model_output ${{outputs.model_output}}
+
+environment: azureml:medicare-train-env:3
+compute: azureml:claims-compute
+
+inputs:
+  training_data:
+    type: uri_folder
+    path: azureml://datastores/claims_medicare_training/paths/latest/
+    mode: ro_mount
+
+outputs:
+  model_output:
+    type: uri_folder
+    mode: upload

@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
+import sys
 import warnings
 from pathlib import Path
 
@@ -38,7 +40,96 @@ warnings.filterwarnings("ignore")
 RS = 1
 BASE_DIR = Path(__file__).resolve().parent
 DATA_PATH = BASE_DIR / "data" / "claims_data.csv"
-MODELS_DIR = BASE_DIR / "models"
+MODELS_DIR = BASE_DIR / "models"  # default for local runs
+
+
+def resolve_models_dir() -> Path:
+    """
+    Pick a writable models directory.
+
+    AML code uploads are often read-only; if repo ``models/`` was included in
+    the upload bundle, joblib.dump fails with PermissionError.
+    """
+    candidates: list[Path] = []
+    if env_dir := os.getenv("MODELS_DIR"):
+        candidates.append(Path(env_dir))
+    candidates.extend([Path("/tmp/models"), BASE_DIR / "models"])
+
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write_probe"
+            probe.write_bytes(b"x")
+            probe.unlink()
+            return candidate
+        except OSError:
+            continue
+    raise RuntimeError("No writable models directory found")
+
+
+def _discover_aml_input_dir() -> Path | None:
+    """Return AML-mounted input folder when job declares a datastore input."""
+    inputs_root = Path("/mnt/azureml/inputs")
+    if not inputs_root.is_dir():
+        return None
+
+    preferred = inputs_root / "training_data"
+    if preferred.is_dir():
+        return preferred
+
+    for child in sorted(inputs_root.iterdir()):
+        if child.is_dir() and (any(child.glob("*.parquet")) or any(child.glob("*.csv"))):
+            return child
+    return None
+
+
+def _read_parquet(path: Path) -> pd.DataFrame:
+    try:
+        return pd.read_parquet(path)
+    except ImportError as exc:
+        raise ImportError(
+            "Reading parquet requires pyarrow. On AML, select environment "
+            "'medicare-train-env' (not AzureML-minimal) and rebuild after adding "
+            "pyarrow>=14.0 to aml-train-env.yml."
+        ) from exc
+
+
+def load_training_frame(data_path: str | None = None) -> pd.DataFrame:
+    """
+    Load training data from:
+    1. Azure ML input binding path (production)
+    2. Local CSV fallback (development)
+    """
+    if data_path and os.path.exists(data_path):
+        path = Path(data_path)
+        if path.is_file():
+            if path.suffix.lower() == ".parquet":
+                print(f"Loading parquet file: {path}")
+                return _read_parquet(path)
+            print(f"Loading CSV file: {path}")
+            return pd.read_csv(path)
+
+        parquet_files = sorted(path.glob("*.parquet"))
+        if parquet_files:
+            print(f"Loading {len(parquet_files)} parquet files from {data_path}")
+            return pd.concat([_read_parquet(f) for f in parquet_files], ignore_index=True)
+
+        csv_files = sorted(path.glob("*.csv"))
+        if csv_files:
+            print(f"Loading {len(csv_files)} CSV files from {data_path}")
+            return pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True)
+
+    local_csv = BASE_DIR / "data" / "claims_data.csv"
+    if local_csv.exists():
+        print(f"Loading local CSV: {local_csv}")
+        return pd.read_csv(local_csv)
+
+    raise FileNotFoundError(
+        "No training data found. Provide --data_path argument "
+        "(Azure ML input binding, e.g. /mnt/azureml/inputs/training_data) "
+        "or place claims_data.csv in data/ folder."
+    )
+
 
 TARGET = "is_medicare_reportable"
 FEATURES = [
@@ -155,8 +246,58 @@ def eval_classifier(model, x, y) -> dict:
 
 
 def main() -> None:
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    raw = pd.read_csv(DATA_PATH)
+    print("=== DEBUG ===")
+    print(f"sys.argv: {sys.argv}")
+    print(f"Current dir: {os.getcwd()}")
+    print(f"Files in current dir: {os.listdir('.')}")
+    print(f"MODELS_DIR env: {os.getenv('MODELS_DIR')}")
+    print(f"Python executable: {sys.executable}")
+    try:
+        import pyarrow
+
+        print(f"pyarrow version: {pyarrow.__version__}")
+    except ImportError:
+        print("pyarrow: NOT INSTALLED — switch job to medicare-train-env")
+
+    data_path = None
+    for arg in sys.argv:
+        if "--data_path" in arg:
+            data_path = arg.split("=")[-1]
+    if data_path:
+        print(f"data_path: {data_path}")
+        print(f"data_path exists: {os.path.exists(data_path)}")
+        if os.path.exists(data_path):
+            print(f"Files in data_path: {os.listdir(data_path)}")
+    print("=== END DEBUG ===")
+
+    parser = argparse.ArgumentParser(description="Train Medicare Classifier")
+    parser.add_argument(
+        "--data_path",
+        type=str,
+        default=None,
+        help="Path to training data (Azure ML input binding or local path)",
+    )
+    parser.add_argument(
+        "--model_output",
+        type=str,
+        default=None,
+        help="Path to write model artifacts",
+    )
+    args = parser.parse_args()
+
+    data_path = args.data_path or os.getenv("TRAINING_DATA_URI") or os.getenv("TRAINING_DATA_PATH")
+    if not data_path and (mount := _discover_aml_input_dir()):
+        data_path = str(mount)
+
+    raw = load_training_frame(data_path=data_path)
+    print(f"Loaded {len(raw):,} training records")
+
+    if args.model_output:
+        models_dir = Path(args.model_output)
+        models_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        models_dir = resolve_models_dir()
+    print(f"Writing artifacts to {models_dir}")
     model_df = engineer_features(raw)
 
     x_raw, feature_columns = encode_features(model_df)
@@ -308,13 +449,15 @@ def main() -> None:
         "comparison_top10": comparison_df.head(10).to_dict(orient="records"),
     }
 
-    joblib.dump(artifact, MODELS_DIR / "medicare_classifier.pkl")
-    (MODELS_DIR / "preprocess_config.json").write_text(
+    joblib.dump(artifact, models_dir / "medicare_classifier.pkl")
+    (models_dir / "preprocess_config.json").write_text(
         json.dumps(preprocess_config, indent=2), encoding="utf-8"
     )
-    comparison_df.to_csv(MODELS_DIR / "model_comparison.csv", index=False)
-    print(f"\nSaved {MODELS_DIR / 'medicare_classifier.pkl'}")
-    _publish_artifacts(MODELS_DIR)
+    comparison_df.to_csv(models_dir / "model_comparison.csv", index=False)
+    print(f"\nSaved {models_dir / 'medicare_classifier.pkl'}")
+    if args.model_output:
+        return
+    _publish_artifacts(models_dir)
 
 
 def _publish_artifacts(models_dir: Path) -> None:

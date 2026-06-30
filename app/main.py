@@ -16,12 +16,18 @@ from app.config import (
     SAMPLE_CLAIMS_PATH,
 )
 from app.monitor import check_drift, get_prediction_stats, log_prediction
-from app.preprocess import load_preprocess_config, predict_medicare
+from app.preprocess import (
+    build_feature_df,
+    get_shap_drivers,
+    load_preprocess_config,
+    predict_medicare,
+)
 from app.schemas import (
     AskRequest,
     AskResponse,
     ClaimFeatures,
     DriftResponse,
+    FeatureDriver,
     HealthResponse,
     ModelInfoResponse,
     MonitoringResponse,
@@ -175,12 +181,26 @@ def predict(claim: ClaimFeatures):
         model_version="1.0",
     )
 
+    try:
+        input_df = build_feature_df(claim.model_dump(), data["feature_columns"])
+        driver_dicts = get_shap_drivers(
+            data["model"],
+            input_df,
+            data["feature_columns"],
+            top_n=3,
+        )
+        key_drivers = [FeatureDriver(**d) for d in driver_dicts]
+    except Exception as e:
+        logging.warning("SHAP failed: %s", e)
+        key_drivers = []
+
     return PredictionResponse(
         is_medicare_reportable=label,
         probability=round(proba, 4),
         label=LABEL_MAP[label],
         model_name=data["model_name"],
         target=data["target"],
+        key_drivers=key_drivers,
     )
 
 

@@ -26,12 +26,20 @@ class ClaimFeatures(BaseModel):
     age_at_event: float = Field(..., ge=0, le=120, description="Claimant age at date of event")
 
 
+class FeatureDriver(BaseModel):
+    feature: str
+    value: float
+    impact: str  # "increases_reportability" or "decreases_reportability"
+    shap_value: float
+
+
 class PredictionResponse(BaseModel):
     is_medicare_reportable: int
     probability: float
     label: str
     model_name: str
     target: str
+    key_drivers: list[FeatureDriver] = []
 
 
 class HealthResponse(BaseModel):

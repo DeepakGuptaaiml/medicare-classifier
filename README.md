@@ -6,6 +6,17 @@ Predicts whether a claim is **Medicare reportable** under MMSEA Section 111 (V1M
 
 > **Python version:** Use **3.12** for notebook + SHAP. See [Python 3.12 + SHAP](#python-312--full-shap) below. Phase 2 Docker/CI will pin `3.12` (same as `claims-intelligence`).
 
+## Azure ML training data
+
+Express Script lands weekly parquet in Blob Storage; AML jobs on `claims-compute` read it via registered datastores (no direct Oracle from training).
+
+```bash
+./scripts/setup-training-datastore.sh   # containers + AML datastores (one-time)
+```
+
+See [docs/AZURE_TRAINING_DATA_SETUP.md](docs/AZURE_TRAINING_DATA_SETUP.md) for Express Script paths, AML job inputs, and `TRAINING_DATA_URI`.  
+Weekly retrain schedule: [docs/AML_WEEKLY_SCHEDULE.md](docs/AML_WEEKLY_SCHEDULE.md).
+
 ## Phase 1 (current)
 
 | Artifact | Description |

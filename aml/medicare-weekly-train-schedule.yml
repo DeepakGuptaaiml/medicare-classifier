@@ -1,0 +1,15 @@
+$schema: https://azuremlschemas.azureedge.net/latest/schedule.schema.json
+name: medicare-weekly-retrain
+display_name: Medicare weekly retrain (Monday)
+description: >
+  Retrain Medicare classifier every Monday 6:00 AM Eastern.
+  Uses a single-step pipeline (schedules do not support CommandJob directly).
+
+trigger:
+  type: cron
+  expression: "0 6 * * 1"
+  time_zone: Eastern Standard Time
+
+create_job:
+  type: pipeline
+  job: ./medicare-train-pipeline-job.yml

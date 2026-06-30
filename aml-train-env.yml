@@ -3,6 +3,7 @@ channels:
   - conda-forge
 dependencies:
   - python=3.10
+  - pyarrow>=14.0
   - pip
   - pip:
       - pandas>=2.0

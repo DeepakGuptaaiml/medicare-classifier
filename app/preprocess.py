@@ -1,4 +1,5 @@
 import json
+import logging
 
 import pandas as pd
 
@@ -64,6 +65,54 @@ def prepare_features(payload: dict, feature_columns: list[str]) -> pd.DataFrame:
     encoded = pd.get_dummies(df[MODEL_FEATURES], columns=CAT_COLS, drop_first=True)
     encoded = encoded.reindex(columns=feature_columns, fill_value=0)
     return encoded.astype(float)
+
+
+def build_feature_df(payload: dict, feature_columns: list[str]) -> pd.DataFrame:
+    """Encoded feature matrix for model input."""
+    return prepare_features(payload, feature_columns)
+
+
+def get_shap_drivers(
+    model,
+    input_df: pd.DataFrame,
+    feature_columns: list,
+    top_n: int = 3,
+) -> list[dict]:
+    """
+    Calculate SHAP values for a single prediction.
+    Returns top N features driving the prediction.
+    In production: explains why claim is/isn't Medicare reportable.
+    """
+    try:
+        import shap
+
+        explainer = shap.TreeExplainer(model)
+        shap_values = explainer.shap_values(input_df[feature_columns])
+
+        if isinstance(shap_values, list):
+            values = shap_values[1][0]
+        else:
+            values = shap_values[0]
+
+        drivers = []
+        for feat, val in zip(feature_columns, values):
+            drivers.append(
+                {
+                    "feature": feat,
+                    "value": float(input_df[feat].iloc[0]),
+                    "shap_value": round(float(val), 4),
+                    "impact": "increases_reportability"
+                    if val > 0
+                    else "decreases_reportability",
+                }
+            )
+
+        drivers.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
+        return drivers[:top_n]
+
+    except Exception as e:
+        logging.warning("SHAP calculation failed: %s", e)
+        return []
 
 
 def predict_medicare(model, payload: dict, feature_columns: list[str]) -> tuple[int, float]:

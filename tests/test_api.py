@@ -99,6 +99,13 @@ def test_predict(client, sample_payload):
     assert body["is_medicare_reportable"] in (0, 1)
     assert 0.0 <= body["probability"] <= 1.0
     assert body["label"] in ("Medicare Reportable", "Not Reportable")
+    assert "key_drivers" in body
+    assert isinstance(body["key_drivers"], list)
+    for driver in body["key_drivers"]:
+        assert "feature" in driver
+        assert "value" in driver
+        assert "shap_value" in driver
+        assert driver["impact"] in ("increases_reportability", "decreases_reportability")
 
 
 def test_model_sample(client):

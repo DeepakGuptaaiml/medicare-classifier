@@ -1,0 +1,26 @@
+$schema: https://azuremlschemas.azureedge.net/latest/pipelineJob.schema.json
+type: pipeline
+
+# Wrapper pipeline — AML schedules require type: pipeline (not CommandJob)
+display_name: medicare-classifier-train-pipeline
+experiment_name: Default
+description: Single-step pipeline wrapping train_medicare_classifier.py
+
+jobs:
+  train:
+    code: .
+    command: >-
+      python train_medicare_classifier.py
+      --data_path ${{inputs.training_data}}
+      --model_output ${{outputs.model_output}}
+    environment: azureml:medicare-train-env:3
+    compute: azureml:claims-compute
+    inputs:
+      training_data:
+        type: uri_folder
+        path: azureml://datastores/claims_medicare_training/paths/latest/
+        mode: ro_mount
+    outputs:
+      model_output:
+        type: uri_folder
+        mode: upload
