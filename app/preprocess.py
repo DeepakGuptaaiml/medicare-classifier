@@ -79,15 +79,25 @@ def get_shap_drivers(
     top_n: int = 3,
 ) -> list[dict]:
     """
-    Calculate SHAP values for a single prediction.
-    Returns top N features driving the prediction.
+    Calculate feature importance for a single prediction.
+    Uses SHAP KernelExplainer for AdaBoost (model-agnostic).
+    Falls back to model feature_importances_ if SHAP fails.
     In production: explains why claim is/isn't Medicare reportable.
+    NOTE: KernelExplainer is slow — uses background sample of 50 rows.
     """
     try:
         import shap
+        import numpy as np
 
-        explainer = shap.TreeExplainer(model)
-        shap_values = explainer.shap_values(input_df[feature_columns])
+        X = input_df[feature_columns]
+
+        background = np.zeros((1, len(feature_columns)))
+        explainer = shap.KernelExplainer(
+            model.predict_proba,
+            background,
+            link="logit",
+        )
+        shap_values = explainer.shap_values(X, nsamples=32)
 
         if isinstance(shap_values, list):
             values = shap_values[1][0]
@@ -99,7 +109,7 @@ def get_shap_drivers(
             drivers.append(
                 {
                     "feature": feat,
-                    "value": float(input_df[feat].iloc[0]),
+                    "value": float(X[feat].iloc[0]),
                     "shap_value": round(float(val), 4),
                     "impact": "increases_reportability"
                     if val > 0
@@ -111,8 +121,28 @@ def get_shap_drivers(
         return drivers[:top_n]
 
     except Exception as e:
-        logging.warning("SHAP calculation failed: %s", e)
-        return []
+        logging.warning("SHAP failed, using feature importance: %s", e)
+
+        try:
+            importances = model.feature_importances_
+            drivers = []
+            input_vals = input_df[feature_columns].iloc[0]
+            for feat, imp, val in zip(feature_columns, importances, input_vals):
+                drivers.append(
+                    {
+                        "feature": feat,
+                        "value": float(val),
+                        "shap_value": round(float(imp), 4),
+                        "impact": "increases_reportability"
+                        if val > 0
+                        else "decreases_reportability",
+                    }
+                )
+            drivers.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
+            return drivers[:top_n]
+        except Exception as e2:
+            logging.warning("Feature importance fallback failed: %s", e2)
+            return []
 
 
 def predict_medicare(model, payload: dict, feature_columns: list[str]) -> tuple[int, float]:
