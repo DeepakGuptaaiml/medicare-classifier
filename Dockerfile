@@ -6,6 +6,7 @@ COPY requirements-api.txt .
 RUN pip install --no-cache-dir -r requirements-api.txt
 
 COPY app/ ./app/
+COPY ml/ ./ml/
 COPY models/ ./models/
 COPY agent/ ./agent/
 

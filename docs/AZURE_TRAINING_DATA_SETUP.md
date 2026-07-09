@@ -469,10 +469,12 @@ az storage blob upload \
 
 ## Reserve forecaster
 
-Use the same storage account and `claims_reserve_training` datastore. When `train_reserve_forecaster.py` is added to `claims-intelligence`, set:
+Use the same storage account and `claims_reserve_training` datastore. `train_reserve_forecaster.py` in `claims-intelligence` mirrors the refactored notebook (4 models, original data, tuned XGBoost):
 
 ```bash
-TRAINING_DATA_URI="${{inputs.training_data}}"
+python train_reserve_forecaster.py \
+  --data_path ${{inputs.training_data}} \
+  --model_output ${{outputs.model_output}}
 ```
 
 with input path `azureml://datastores/claims_reserve_training/paths/latest/`.

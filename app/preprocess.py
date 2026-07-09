@@ -1,70 +1,29 @@
-import json
-import logging
+"""API preprocessing — delegates to ml.inference_pipeline (train/serve parity)."""
 
 import pandas as pd
 
 from app.config import PREPROCESS_CONFIG_PATH
-
-MODEL_FEATURES = [
-    "data_set",
-    "pay_cat",
-    "pay_code",
-    "pay_type",
-    "paid_1",
-    "paid_3",
-    "amount",
-    "proc_unit",
-    "cont_num",
-    "claim_open",
-    "date_v1m_xmit_flag",
-    "is_us_claimant",
-    "orm_threshold_met",
-    "tpoc_threshold_met",
-    "is_wc",
-    "pay_code_bucket",
-    "is_excluded_coverage",
-    "is_excluded_line",
-    "days_open",
-    "age_at_event",
-]
-
-CAT_COLS = ["data_set", "pay_cat", "pay_type", "pay_code_bucket"]
-NUM_COLS = [c for c in MODEL_FEATURES if c not in CAT_COLS]
+from ml.constants import MODEL_FEATURES
+from ml.inference_pipeline import InferencePipeline
 
 
 def load_preprocess_config() -> dict:
+    import json
+
     with open(PREPROCESS_CONFIG_PATH, encoding="utf-8") as f:
         return json.load(f)
 
 
+def _pipeline(model, feature_columns: list[str]) -> InferencePipeline:
+    return InferencePipeline(
+        model=model,
+        feature_columns=feature_columns,
+        preprocess_config=load_preprocess_config(),
+    )
+
+
 def prepare_features(payload: dict, feature_columns: list[str]) -> pd.DataFrame:
-    config = load_preprocess_config()
-    row = {feature: payload.get(feature) for feature in MODEL_FEATURES}
-    df = pd.DataFrame([row])
-
-    for col in CAT_COLS:
-        df[col] = df[col].astype(str).replace({"nan": None, "None": None})
-        df[col] = df[col].fillna(config["cat_impute"][col])
-
-    for col in NUM_COLS:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-        df[col] = df[col].fillna(config["num_impute"][col])
-
-    for col in [
-        "claim_open",
-        "date_v1m_xmit_flag",
-        "is_us_claimant",
-        "orm_threshold_met",
-        "tpoc_threshold_met",
-        "is_wc",
-        "is_excluded_coverage",
-        "is_excluded_line",
-    ]:
-        df[col] = df[col].astype(int)
-
-    encoded = pd.get_dummies(df[MODEL_FEATURES], columns=CAT_COLS, drop_first=True)
-    encoded = encoded.reindex(columns=feature_columns, fill_value=0)
-    return encoded.astype(float)
+    return _pipeline(model=None, feature_columns=feature_columns).encode_raw(payload)
 
 
 def build_feature_df(payload: dict, feature_columns: list[str]) -> pd.DataFrame:
@@ -78,75 +37,21 @@ def get_shap_drivers(
     feature_columns: list,
     top_n: int = 3,
 ) -> list[dict]:
-    """
-    Calculate feature importance for a single prediction.
-    Uses SHAP KernelExplainer for AdaBoost (model-agnostic).
-    Falls back to model feature_importances_ if SHAP fails.
-    In production: explains why claim is/isn't Medicare reportable.
-    NOTE: KernelExplainer is slow — uses background sample of 50 rows.
-    """
-    try:
-        import shap
-        import numpy as np
-
-        X = input_df[feature_columns]
-
-        background = np.zeros((1, len(feature_columns)))
-        explainer = shap.KernelExplainer(
-            model.predict_proba,
-            background,
-            link="logit",
-        )
-        shap_values = explainer.shap_values(X, nsamples=32)
-
-        if isinstance(shap_values, list):
-            values = shap_values[1][0]
-        else:
-            values = shap_values[0]
-
-        drivers = []
-        for feat, val in zip(feature_columns, values):
-            drivers.append(
-                {
-                    "feature": feat,
-                    "value": float(X[feat].iloc[0]),
-                    "shap_value": round(float(val), 4),
-                    "impact": "increases_reportability"
-                    if val > 0
-                    else "decreases_reportability",
-                }
-            )
-
-        drivers.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
-        return drivers[:top_n]
-
-    except Exception as e:
-        logging.warning("SHAP failed, using feature importance: %s", e)
-
-        try:
-            importances = model.feature_importances_
-            drivers = []
-            input_vals = input_df[feature_columns].iloc[0]
-            for feat, imp, val in zip(feature_columns, importances, input_vals):
-                drivers.append(
-                    {
-                        "feature": feat,
-                        "value": float(val),
-                        "shap_value": round(float(imp), 4),
-                        "impact": "increases_reportability"
-                        if val > 0
-                        else "decreases_reportability",
-                    }
-                )
-            drivers.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
-            return drivers[:top_n]
-        except Exception as e2:
-            logging.warning("Feature importance fallback failed: %s", e2)
-            return []
+    return _pipeline(model, feature_columns).get_shap_drivers(
+        input_df=input_df,
+        top_n=top_n,
+    )
 
 
 def predict_medicare(model, payload: dict, feature_columns: list[str]) -> tuple[int, float]:
-    features = prepare_features(payload, feature_columns)
-    proba = float(model.predict_proba(features)[0][1])
-    label = 1 if proba >= 0.5 else 0
-    return label, proba
+    return _pipeline(model, feature_columns).predict_one(payload)
+
+
+__all__ = [
+    "MODEL_FEATURES",
+    "build_feature_df",
+    "get_shap_drivers",
+    "load_preprocess_config",
+    "predict_medicare",
+    "prepare_features",
+]
